@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: desksharing-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-desksharing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-desksharing}
+      POSTGRES_DB: ${POSTGRES_DB:-desksharing}
+    ports:
+      - "${POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - desksharing_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  desksharing_pgdata:

@@ -15,6 +15,7 @@ Thumbs.db
 # Go
 /bin/
 /dist/
+/data/
 *.exe
 *.test
 coverage.out

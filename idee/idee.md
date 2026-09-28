@@ -4,6 +4,8 @@ Plattform zur Verwaltung und Reservierung von Desksharing-Plätzen. Platztypen u
 
 **Betrieb:** On-Prem (eigene Firma) oder bei einem Hoster — dieselbe Software, dieselbe API.
 
+**Clients:** Verwaltung (Standorte, Gebäude, Plätze, Benutzer, Ausstattung, …) ausschließlich am **Computer / Web**. Die **Mobile-App** kommt später und dient nur dem Buchen (Suche, Buchung, Status, Check-in/out, Erinnerungen) — keine Verwaltungsfunktionen.
+
 # Platformadministrator
 
 Verwaltet die Mandanten (in der Regel Firmen).
@@ -36,7 +38,7 @@ Der Mandanten-Admin verwaltet Gebäude (Adresse / GPS-Koordinaten), Stockwerke u
 
 `Gebäudekürzel-Stockwerk-Raumnummer-Platznummer`
 
-**Grafischer Editor (nur Web):** Stockwerkpläne ganz oder in Teilen hochladen; Räume als Polygone, Plätze als Rechtecke. Die Mobile-App hat keinen Editor für Stockwerke oder Plätze.
+**Grafischer Editor (nur Web):** Stockwerkpläne hochladen; **Räume und Plätze zunächst als Rechtecke** auf dem Plan (später optional Polygone für unregelmäßig geformte Räume). Die Mobile-App hat keinen Editor.
 
 ## Platzdefinitionen
 
@@ -53,6 +55,11 @@ Eigenständige Objekte, **ortsgebunden** (Standort, ggf. Gebäude/Raum). Unabhä
 - Für **Mitarbeiter** und **Teams**
 - Belegte Plätze sind nicht buchbar (keine Überbuchung)
 - Freie Plätze: grün; belegte: rot; Filter z. B. „3 Bildschirme + 2 Dockingstations“
+
+**Ziel-Flow (Web und später Mobile):**  
+Standort (und ggf. Gebäude) wählen → Stockwerk wählen → **Gebäude-/Stockwerkplan** öffnen → freien Platz auf dem Plan antippen/klicken und buchen. Filter (Platztyp, Ausstattung, Zeitraum) schränken ein, welche Plätze auf dem Plan als buchbar hervorgehoben werden.
+
+**Übergang (jetzt):** Listen-/Wochenraster-Suche und Raum-Wochenübersicht, bis Stockwerkpläne und Platz-Geometrie im Editor gepflegt sind. Die kaskadierende Auswahl Standort → Gebäude → Stockwerk → Raum bereitet denselben Navigationseinstieg vor.
 
 ### Sperren
 
@@ -73,7 +80,7 @@ Erinnerungen in der Handy-App (z. B. Check-in offen) — lokal und ggf. optional
 
 # Mobile-App
 
-Android-App (Flutter), Download über die Website. Dieselbe API wie die Web-App. Fokus: Suche, Buchung, Status, Check-in/out, Erinnerungen — **kein** grafischer Stockwerk-/Platz-Editor.
+Android-App (Flutter), Download über die Website. Dieselbe API wie die Web-App, aber **nur Buchungs-Workflow**: Suche, Buchen, Status, Check-in/out, Erinnerungen. **Keine** Verwaltung von Standorten, Gebäuden, Stockwerken, Plätzen, Benutzern oder Katalogen — das bleibt Web/Desktop.
 
 # Datenschutz
 
