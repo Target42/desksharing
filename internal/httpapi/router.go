@@ -96,6 +96,7 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 
 	mux.HandleFunc("GET /api/v1/rooms/{roomID}/places", tenant(catH.ListPlaces))
 	mux.HandleFunc("POST /api/v1/rooms/{roomID}/places", admin(catH.CreatePlace))
+	mux.HandleFunc("POST /api/v1/rooms/{roomID}/places/bulk", admin(catH.CreatePlacesBulk))
 	mux.HandleFunc("DELETE /api/v1/places/{id}", admin(catH.DeletePlace))
 	mux.HandleFunc("PUT /api/v1/places/{id}/equipments", admin(catH.SetPlaceEquipments))
 

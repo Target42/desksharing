@@ -382,6 +382,54 @@ func (h CatalogHandlers) CreatePlace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, item)
 }
 
+func (h CatalogHandlers) CreatePlacesBulk(w http.ResponseWriter, r *http.Request) {
+	roomID, err := parseID(r, "roomID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var body struct {
+		Count        int      `json:"count"`
+		PlaceTypeID  string   `json:"place_type_id"`
+		BookingMode  string   `json:"booking_mode"`
+		EquipmentIDs []string `json:"equipment_ids"`
+		Distribute   bool     `json:"distribute"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, auth.ErrInvalidInput("invalid JSON body"))
+		return
+	}
+	placeTypeID, err := uuid.Parse(body.PlaceTypeID)
+	if err != nil {
+		writeError(w, auth.ErrInvalidInput("place_type_id must be a UUID"))
+		return
+	}
+	equipmentIDs := make([]uuid.UUID, 0, len(body.EquipmentIDs))
+	for _, raw := range body.EquipmentIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			writeError(w, auth.ErrInvalidInput("equipment_ids must be UUIDs"))
+			return
+		}
+		equipmentIDs = append(equipmentIDs, id)
+	}
+	items, err := h.Service.CreatePlacesBulk(r.Context(), h.tenantID(r), roomID, catalog.CreatePlacesBulkInput{
+		Count:        body.Count,
+		PlaceTypeID:  placeTypeID,
+		BookingMode:  body.BookingMode,
+		EquipmentIDs: equipmentIDs,
+		Distribute:   body.Distribute,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if items == nil {
+		items = []catalog.Place{}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"items": items, "count": len(items)})
+}
+
 func (h CatalogHandlers) DeletePlace(w http.ResponseWriter, r *http.Request) {
 	id, err := parseID(r, "id")
 	if err != nil {

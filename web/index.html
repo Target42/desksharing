@@ -137,7 +137,7 @@
         </div>
         <div id="floor-plan-box" class="map-panel hidden">
           <div class="section-head"><h2>Stockwerkplan</h2></div>
-          <p class="hint">Plan hochladen, dann Räume und Plätze als Rechtecke aufziehen.</p>
+          <p class="hint">Hier nur Räume als Rechtecke markieren. Plätze legst du danach in der Raumansicht fest.</p>
           <div id="floor-plan-upload" class="admin-only hidden">
             <label class="file-label">Plan-Bild (PNG/JPG/WebP)
               <input type="file" id="floor-plan-file" accept="image/png,image/jpeg,image/webp" />
@@ -146,22 +146,42 @@
           </div>
           <div id="floor-plan-editor" class="floor-plan-editor hidden">
             <div class="floor-plan-toolbar admin-only hidden" id="floor-plan-toolbar">
-              <label>Zeichnen
-                <select id="floor-plan-draw-mode">
-                  <option value="room">Raum</option>
-                  <option value="place">Platz</option>
-                </select>
-              </label>
-              <label>Ziel<select id="floor-plan-target"></select></label>
+              <label>Raum<select id="floor-plan-target"></select></label>
               <button type="button" class="secondary" id="btn-floor-plan-clear-target">Rechteck löschen</button>
             </div>
-            <div class="floor-plan-stage" id="floor-plan-stage">
-              <img id="floor-plan-image" alt="Stockwerkplan" />
+            <div class="plan-zoom-bar">
+              <button type="button" class="secondary" id="btn-floor-plan-zoom-out" title="Verkleinern">−</button>
+              <button type="button" class="secondary" id="btn-floor-plan-zoom-reset" title="Einpassen">Einpassen</button>
+              <button type="button" class="secondary" id="btn-floor-plan-zoom-in" title="Vergrößern">+</button>
+            </div>
+            <div class="floor-plan-stage plan-stage" id="floor-plan-stage">
+              <img id="floor-plan-image" class="plan-source-img" alt="" />
               <canvas id="floor-plan-canvas"></canvas>
             </div>
             <p class="hint" id="floor-plan-hint"></p>
           </div>
           <p class="hint" id="floor-plan-empty">Noch kein Plan für dieses Stockwerk.</p>
+        </div>
+        <div id="room-plan-box" class="map-panel hidden">
+          <div class="section-head"><h2>Raumplan</h2></div>
+          <p class="hint">Ausschnitt des Stockwerkplans für diesen Raum — hier Plätze zeichnen oder verteilen.</p>
+          <div id="room-plan-editor" class="floor-plan-editor hidden">
+            <div class="floor-plan-toolbar admin-only hidden" id="room-plan-toolbar">
+              <label>Platz<select id="room-plan-target"></select></label>
+              <button type="button" class="secondary" id="btn-room-plan-clear-target">Rechteck löschen</button>
+              <button type="button" class="secondary" id="btn-room-plan-distribute">Plätze verteilen</button>
+            </div>
+            <div class="plan-zoom-bar">
+              <button type="button" class="secondary" id="btn-room-plan-zoom-out" title="Verkleinern">−</button>
+              <button type="button" class="secondary" id="btn-room-plan-zoom-reset" title="Einpassen">Einpassen</button>
+              <button type="button" class="secondary" id="btn-room-plan-zoom-in" title="Vergrößern">+</button>
+            </div>
+            <div class="floor-plan-stage plan-stage room-plan-stage" id="room-plan-stage">
+              <canvas id="room-plan-canvas"></canvas>
+            </div>
+            <p class="hint" id="room-plan-hint"></p>
+          </div>
+          <p class="hint" id="room-plan-empty">Raumplan nicht verfügbar.</p>
         </div>
         <div class="split">
           <div>
@@ -173,12 +193,6 @@
               <h3 id="create-title">Neu anlegen</h3>
               <div id="create-fields"></div>
               <div class="actions"><button type="submit">Anlegen</button></div>
-            </form>
-            <form id="form-place-equipments" class="create-box admin-only hidden">
-              <h3>Ausstattung für <span id="equip-place-label"></span></h3>
-              <div id="equip-checkboxes" class="check-grid"></div>
-              <input type="hidden" name="place_id" id="equip-place-id" />
-              <div class="actions"><button type="submit">Speichern</button></div>
             </form>
           </div>
         </div>
@@ -322,6 +336,27 @@
         <ul class="list" id="my-bookings-list"></ul>
       </section>
     </main>
+
+    <div id="equip-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="equip-modal-title">
+      <div class="modal-backdrop" data-equip-close tabindex="-1"></div>
+      <form id="form-place-equipments" class="modal-panel">
+        <div class="modal-head">
+          <h3 id="equip-modal-title">Ausstattung für <span id="equip-place-label"></span></h3>
+          <button type="button" class="modal-close" data-equip-close aria-label="Schließen">×</button>
+        </div>
+        <label class="equip-search-label">Suchen
+          <input type="search" id="equip-filter" placeholder="z. B. Docking, Monitor…" autocomplete="off" />
+        </label>
+        <p class="hint" id="equip-selected-count"></p>
+        <div id="equip-checkboxes" class="check-grid equip-check-scroll"></div>
+        <input type="hidden" name="place_id" id="equip-place-id" />
+        <div class="actions modal-actions">
+          <button type="button" class="secondary" data-equip-close>Abbrechen</button>
+          <button type="submit">Speichern</button>
+        </div>
+      </form>
+    </div>
+
     <script type="module" src="/assets/app.js"></script>
   </body>
 </html>

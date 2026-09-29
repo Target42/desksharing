@@ -37,6 +37,10 @@ body {
   background-attachment: fixed;
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 a {
   color: var(--accent);
   text-decoration: none;
@@ -443,6 +447,97 @@ select {
   cursor: pointer;
 }
 
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 20, 18, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.modal-panel {
+  position: relative;
+  z-index: 1;
+  width: min(32rem, 100%);
+  max-height: min(88vh, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.15rem 1.25rem 1.25rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.modal-head h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.modal-close {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.6rem;
+  line-height: 1;
+  padding: 0.1rem 0.35rem;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.modal-close:hover {
+  color: var(--ink);
+  background: rgba(20, 34, 31, 0.06);
+}
+
+.equip-search-label {
+  margin: 0;
+}
+
+.equip-check-scroll {
+  flex: 1 1 auto;
+  min-height: 8rem;
+  max-height: min(48vh, 380px);
+  overflow: auto;
+  padding: 0.35rem 0.25rem 0.35rem 0;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.equip-check-scroll .equip-empty {
+  margin: 0.5rem 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.modal-actions {
+  margin: 0;
+  justify-content: flex-end;
+}
+
 .check-inline {
   display: flex;
   flex-direction: row;
@@ -777,7 +872,7 @@ select {
 
 .floor-plan-toolbar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 0.65rem;
   margin-bottom: 0.75rem;
   align-items: end;
@@ -786,27 +881,54 @@ select {
 .floor-plan-stage {
   position: relative;
   width: 100%;
-  max-height: min(70vh, 720px);
-  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #e8eee9;
 }
 
-.floor-plan-stage img {
+.plan-stage {
   display: block;
-  width: 100%;
-  height: auto;
-  user-select: none;
-  pointer-events: none;
+  height: min(62vh, 640px);
+  min-height: 420px;
+  overflow: hidden;
+  touch-action: none;
 }
 
-.floor-plan-stage canvas {
+.plan-stage canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  cursor: grab;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.plan-stage canvas.is-drawing {
   cursor: crosshair;
+}
+
+.plan-stage canvas.is-panning {
+  cursor: grabbing;
+}
+
+.plan-source-img {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.plan-zoom-bar {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0 0 0.65rem;
+}
+
+.plan-zoom-bar button {
+  min-width: 2.4rem;
 }
 
 .file-label input[type="file"] {

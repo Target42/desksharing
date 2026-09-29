@@ -313,13 +313,14 @@ async function renderLocations() {
   applyAdminVisibility();
   renderCreateForm();
   renderCrumbs();
-  document.querySelector("#form-place-equipments").classList.add("hidden");
+  closePlaceEquipmentEditor();
 
   const list = document.querySelector("#locations-list");
   const title = document.querySelector("#locations-list-title");
   const overviewBox = document.querySelector("#locations-overview-box");
   const detailBox = document.querySelector("#location-detail-box");
   const floorPlanBox = document.querySelector("#floor-plan-box");
+  const roomPlanBox = document.querySelector("#room-plan-box");
   list.innerHTML = `<li class="empty">Lade…</li>`;
 
   const seedBox = document.querySelector("#seed-demo-box");
@@ -333,8 +334,10 @@ async function renderLocations() {
       overviewBox?.classList.remove("hidden");
       detailBox?.classList.add("hidden");
       floorPlanBox?.classList.add("hidden");
+      roomPlanBox?.classList.add("hidden");
       destroyPickerMap();
       destroyFloorPlanEditor();
+      destroyRoomPlanEditor();
       const data = await api("/api/v1/locations", { auth: true });
       renderList(list, data.items, (item) => ({
         title: item.name,
@@ -365,7 +368,9 @@ async function renderLocations() {
       title.textContent = `Gebäude in ${nav.location.name}`;
       detailBox?.classList.remove("hidden");
       floorPlanBox?.classList.add("hidden");
+      roomPlanBox?.classList.add("hidden");
       destroyFloorPlanEditor();
+      destroyRoomPlanEditor();
       renderLocationAddressPanel(nav.location);
       const data = await api(`/api/v1/locations/${nav.location.id}/buildings`, { auth: true });
       renderList(list, data.items, (item) => ({
@@ -394,7 +399,9 @@ async function renderLocations() {
     if (nav.level === "floors") {
       title.textContent = `Stockwerke in ${nav.building.code}`;
       floorPlanBox?.classList.add("hidden");
+      roomPlanBox?.classList.add("hidden");
       destroyFloorPlanEditor();
+      destroyRoomPlanEditor();
       const data = await api(`/api/v1/buildings/${nav.building.id}/floors`, { auth: true });
       renderList(list, data.items, (item) => ({
         title: item.name,
@@ -418,6 +425,8 @@ async function renderLocations() {
     if (nav.level === "rooms") {
       title.textContent = `Räume auf ${nav.floor.name}`;
       floorPlanBox?.classList.remove("hidden");
+      roomPlanBox?.classList.add("hidden");
+      destroyRoomPlanEditor();
       await renderFloorPlanEditor(nav.floor.id);
       const data = await api(`/api/v1/floors/${nav.floor.id}/rooms`, { auth: true });
       renderList(list, data.items, (item) => ({
@@ -455,6 +464,8 @@ async function renderLocations() {
       title.textContent = `Plätze in Raum ${nav.room.number}`;
       floorPlanBox?.classList.add("hidden");
       destroyFloorPlanEditor();
+      roomPlanBox?.classList.remove("hidden");
+      await renderRoomPlanEditor(nav.floor.id, nav.room.id);
       const data = await api(`/api/v1/rooms/${nav.room.id}/places`, { auth: true });
       renderList(list, data.items, (item) => ({
         title: item.label || item.number,
@@ -480,37 +491,123 @@ async function renderLocations() {
 }
 
 async function openPlaceEquipmentEditor(place) {
+  const modal = document.querySelector("#equip-modal");
   const form = document.querySelector("#form-place-equipments");
-  const box = document.querySelector("#equip-checkboxes");
+  const filter = document.querySelector("#equip-filter");
+  const countEl = document.querySelector("#equip-selected-count");
   document.querySelector("#equip-place-label").textContent = place.label || place.number;
   document.querySelector("#equip-place-id").value = place.id;
+  if (filter) filter.value = "";
+
   const data = await api("/api/v1/equipments", { auth: true });
-  const selected = new Set((place.equipments || []).map((e) => e.id));
-  if (!data.items.length) {
-    box.innerHTML = `<p class="hint">Keine Ausstattungen definiert. Bitte unter „Ausstattung“ anlegen.</p>`;
-  } else {
-    box.innerHTML = data.items
-      .map(
-        (e) =>
-          `<label><input type="checkbox" name="equipment_id" value="${e.id}" ${selected.has(e.id) ? "checked" : ""}/> ${escapeHtml(e.name)}</label>`
-      )
-      .join("");
-  }
-  form.classList.remove("hidden");
+  placeEquipEditorState = {
+    items: data.items || [],
+    selected: new Set((place.equipments || []).map((e) => e.id)),
+  };
+  renderPlaceEquipmentCheckboxes();
+  modal?.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  queueMicrotask(() => filter?.focus());
 }
+
+function closePlaceEquipmentEditor() {
+  const modal = document.querySelector("#equip-modal");
+  modal?.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  placeEquipEditorState = null;
+  const filter = document.querySelector("#equip-filter");
+  if (filter) filter.value = "";
+}
+
+function updatePlaceEquipmentCount() {
+  const countEl = document.querySelector("#equip-selected-count");
+  if (!countEl || !placeEquipEditorState) return;
+  const total = placeEquipEditorState.items.length;
+  const selected = placeEquipEditorState.selected.size;
+  const q = (document.querySelector("#equip-filter")?.value || "").trim().toLowerCase();
+  const visible = q
+    ? placeEquipEditorState.items.filter((e) => (e.name || "").toLowerCase().includes(q)).length
+    : total;
+  if (!total) {
+    countEl.textContent = "";
+    return;
+  }
+  countEl.textContent =
+    visible === total
+      ? `${selected} von ${total} ausgewählt`
+      : `${selected} ausgewählt · ${visible} von ${total} angezeigt`;
+}
+
+function renderPlaceEquipmentCheckboxes() {
+  const box = document.querySelector("#equip-checkboxes");
+  if (!box || !placeEquipEditorState) return;
+  const q = (document.querySelector("#equip-filter")?.value || "").trim().toLowerCase();
+  const items = placeEquipEditorState.items;
+  if (!items.length) {
+    box.innerHTML = `<p class="equip-empty">Keine Ausstattungen definiert. Bitte unter „Ausstattung“ anlegen.</p>`;
+    updatePlaceEquipmentCount();
+    return;
+  }
+  const filtered = q ? items.filter((e) => (e.name || "").toLowerCase().includes(q)) : items;
+  if (!filtered.length) {
+    box.innerHTML = `<p class="equip-empty">Keine Treffer für „${escapeHtml(document.querySelector("#equip-filter")?.value || "")}“.</p>`;
+    updatePlaceEquipmentCount();
+    return;
+  }
+  box.innerHTML = filtered
+    .map(
+      (e) =>
+        `<label><input type="checkbox" name="equipment_id" value="${e.id}" ${
+          placeEquipEditorState.selected.has(e.id) ? "checked" : ""
+        }/> ${escapeHtml(e.name)}</label>`
+    )
+    .join("");
+  updatePlaceEquipmentCount();
+}
+
+let placeEquipEditorState = null;
+
+document.querySelector("#equip-filter")?.addEventListener("input", () => {
+  renderPlaceEquipmentCheckboxes();
+});
+
+document.querySelector("#equip-checkboxes")?.addEventListener("change", (e) => {
+  const input = e.target;
+  if (!placeEquipEditorState || input?.name !== "equipment_id") return;
+  if (input.checked) placeEquipEditorState.selected.add(input.value);
+  else placeEquipEditorState.selected.delete(input.value);
+  updatePlaceEquipmentCount();
+});
+
+document.querySelector("#equip-modal")?.addEventListener("click", (e) => {
+  if (e.target.closest("[data-equip-close]")) {
+    e.preventDefault();
+    closePlaceEquipmentEditor();
+  }
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const modal = document.querySelector("#equip-modal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  closePlaceEquipmentEditor();
+});
 
 document.querySelector("#form-place-equipments").addEventListener("submit", async (e) => {
   e.preventDefault();
   const msg = document.querySelector("#locations-msg");
   clearMsg(msg);
   const placeId = document.querySelector("#equip-place-id").value;
-  const ids = [...e.target.querySelectorAll("input[name=equipment_id]:checked")].map((el) => el.value);
+  const ids = placeEquipEditorState
+    ? [...placeEquipEditorState.selected]
+    : [...e.target.querySelectorAll("input[name=equipment_id]:checked")].map((el) => el.value);
   try {
     await api(`/api/v1/places/${placeId}/equipments`, {
       method: "PUT",
       auth: true,
       body: { equipment_ids: ids },
     });
+    closePlaceEquipmentEditor();
     setMsg(msg, "ok", "Ausstattung gespeichert.");
     await renderLocations();
   } catch (err) {
@@ -931,50 +1028,132 @@ function renderLocationAddressPanel(location) {
 }
 
 let floorPlanState = null;
+let roomPlanState = null;
 
 function destroyFloorPlanEditor() {
-  if (floorPlanState?.objectUrl) {
-    URL.revokeObjectURL(floorPlanState.objectUrl);
-  }
-  if (floorPlanState?.onResize) {
-    window.removeEventListener("resize", floorPlanState.onResize);
-  }
+  if (floorPlanState?.objectUrl) URL.revokeObjectURL(floorPlanState.objectUrl);
+  if (floorPlanState?.onResize) window.removeEventListener("resize", floorPlanState.onResize);
   floorPlanState = null;
   const img = document.querySelector("#floor-plan-image");
   if (img) img.removeAttribute("src");
   const canvas = document.querySelector("#floor-plan-canvas");
-  if (canvas) {
-    const ctx = canvas.getContext("2d");
-    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+  if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function destroyRoomPlanEditor() {
+  if (roomPlanState?.objectUrl) URL.revokeObjectURL(roomPlanState.objectUrl);
+  if (roomPlanState?.onResize) window.removeEventListener("resize", roomPlanState.onResize);
+  if (roomPlanState?.imageEl) roomPlanState.imageEl.onload = null;
+  roomPlanState = null;
+  const canvas = document.querySelector("#room-plan-canvas");
+  if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function paintNormRect(ctx, width, height, rect, fill, stroke, label, lineWidth = 2) {
+  if (!rect) return;
+  const x = rect.x * width;
+  const y = rect.y * height;
+  const w = rect.w * width;
+  const h = rect.h * height;
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = lineWidth;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  if (label) {
+    ctx.fillStyle = stroke;
+    ctx.font = "600 12px Manrope, sans-serif";
+    ctx.fillText(label, x + 4, y + 14);
   }
 }
 
-function syncFloorPlanCanvasSize() {
+function absToLocal(abs, roomRect) {
+  if (!abs || !roomRect || roomRect.w <= 0 || roomRect.h <= 0) return null;
+  return {
+    x: (abs.x - roomRect.x) / roomRect.w,
+    y: (abs.y - roomRect.y) / roomRect.h,
+    w: abs.w / roomRect.w,
+    h: abs.h / roomRect.h,
+  };
+}
+
+function localToAbs(local, roomRect) {
+  if (!local || !roomRect) return null;
+  return {
+    x: roomRect.x + local.x * roomRect.w,
+    y: roomRect.y + local.y * roomRect.h,
+    w: local.w * roomRect.w,
+    h: local.h * roomRect.h,
+  };
+}
+
+function distributeRectsInRoom(roomRect, count) {
+  if (count < 1) return [];
+  const cols = Math.ceil(Math.sqrt(count));
+  const rows = Math.ceil(count / cols);
+  const gapX = roomRect.w * 0.04;
+  const gapY = roomRect.h * 0.04;
+  const cellW = Math.max(0.01, (roomRect.w - gapX * (cols + 1)) / cols);
+  const cellH = Math.max(0.01, (roomRect.h - gapY * (rows + 1)) / rows);
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const c = i % cols;
+    const r = Math.floor(i / cols);
+    out.push({
+      x: roomRect.x + gapX + c * (cellW + gapX),
+      y: roomRect.y + gapY + r * (cellH + gapY),
+      w: cellW,
+      h: cellH,
+    });
+  }
+  return out;
+}
+
+function getFloorPlanDrawRect(canvas) {
   const img = document.querySelector("#floor-plan-image");
+  if (!img?.naturalWidth || !floorPlanState) return null;
+  const view = floorPlanState.view || { zoom: 1, panX: 0, panY: 0 };
+  const base = Math.min(canvas.width / img.naturalWidth, canvas.height / img.naturalHeight) * 0.98;
+  const scale = base * view.zoom;
+  const dw = img.naturalWidth * scale;
+  const dh = img.naturalHeight * scale;
+  const dx = (canvas.width - dw) / 2 + view.panX;
+  const dy = (canvas.height - dh) / 2 + view.panY;
+  return { dx, dy, dw, dh, scale, nw: img.naturalWidth, nh: img.naturalHeight };
+}
+
+function syncFloorPlanCanvasSize() {
   const canvas = document.querySelector("#floor-plan-canvas");
-  if (!img || !canvas || !img.naturalWidth) return;
-  const w = img.clientWidth;
-  const h = img.clientHeight;
-  canvas.width = w;
-  canvas.height = h;
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
+  const stage = document.querySelector("#floor-plan-stage");
+  const img = document.querySelector("#floor-plan-image");
+  if (!canvas || !stage || !img?.naturalWidth) return;
+  const w = Math.max(320, stage.clientWidth || 640);
+  const h = Math.max(420, stage.clientHeight || 480);
+  canvas.width = Math.round(w);
+  canvas.height = Math.round(h);
   drawFloorPlanOverlay();
 }
 
 function drawFloorPlanOverlay() {
   const canvas = document.querySelector("#floor-plan-canvas");
-  if (!canvas || !floorPlanState?.layout) return;
+  const img = document.querySelector("#floor-plan-image");
+  if (!canvas || !floorPlanState?.layout || !img?.naturalWidth) return;
   const ctx = canvas.getContext("2d");
-  const { width, height } = canvas;
-  ctx.clearRect(0, 0, width, height);
+  const draw = getFloorPlanDrawRect(canvas);
+  if (!draw) return;
 
-  const paint = (rect, fill, stroke, label) => {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#d8e1db";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, draw.nw, draw.nh, draw.dx, draw.dy, draw.dw, draw.dh);
+
+  const paintAbs = (rect, fill, stroke, label) => {
     if (!rect) return;
-    const x = rect.x * width;
-    const y = rect.y * height;
-    const w = rect.w * width;
-    const h = rect.h * height;
+    const x = draw.dx + rect.x * draw.dw;
+    const y = draw.dy + rect.y * draw.dh;
+    const w = rect.w * draw.dw;
+    const h = rect.h * draw.dh;
     ctx.fillStyle = fill;
     ctx.strokeStyle = stroke;
     ctx.lineWidth = 2;
@@ -988,37 +1167,78 @@ function drawFloorPlanOverlay() {
   };
 
   (floorPlanState.layout.rooms || []).forEach((rm) => {
-    paint(rm.rectangle, "rgba(15, 122, 101, 0.18)", "#0f7a65", rm.number || rm.name);
+    paintAbs(rm.rectangle, "rgba(15, 122, 77, 0.16)", "#0f7a65", rm.number || rm.name);
   });
-  (floorPlanState.layout.places || []).forEach((pl) => {
-    paint(pl.rectangle, "rgba(196, 122, 46, 0.28)", "#a65d12", pl.number);
-  });
-
   if (floorPlanState.draft) {
-    paint(floorPlanState.draft, "rgba(40, 90, 180, 0.25)", "#285ab4", "");
+    paintAbs(floorPlanState.draft, "rgba(40, 90, 180, 0.28)", "#285ab4", "");
   }
 }
 
+function floorPlanScreenToNorm(e) {
+  const canvas = document.querySelector("#floor-plan-canvas");
+  const draw = getFloorPlanDrawRect(canvas);
+  if (!canvas || !draw || draw.dw <= 0 || draw.dh <= 0) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+  return {
+    x: Math.min(1, Math.max(0, (x - draw.dx) / draw.dw)),
+    y: Math.min(1, Math.max(0, (y - draw.dy) / draw.dh)),
+  };
+}
+
+function floorPlanZoomAt(factor, clientX, clientY) {
+  if (!floorPlanState?.view) return;
+  const canvas = document.querySelector("#floor-plan-canvas");
+  if (!canvas) return;
+  const before = getFloorPlanDrawRect(canvas);
+  const nextZoom = Math.min(8, Math.max(0.4, floorPlanState.view.zoom * factor));
+  if (before && clientX != null && clientY != null) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = ((clientX - rect.left) / rect.width) * canvas.width;
+    const my = ((clientY - rect.top) / rect.height) * canvas.height;
+    const lx = (mx - before.dx) / before.dw;
+    const ly = (my - before.dy) / before.dh;
+    floorPlanState.view.zoom = nextZoom;
+    const after = getFloorPlanDrawRect(canvas);
+    if (after) {
+      floorPlanState.view.panX += mx - (after.dx + lx * after.dw);
+      floorPlanState.view.panY += my - (after.dy + ly * after.dh);
+    }
+  } else {
+    floorPlanState.view.zoom = nextZoom;
+  }
+  drawFloorPlanOverlay();
+}
+
+function floorPlanResetView() {
+  if (!floorPlanState) return;
+  floorPlanState.view = { zoom: 1, panX: 0, panY: 0 };
+  drawFloorPlanOverlay();
+}
+
 function fillFloorPlanTargets() {
-  const mode = document.querySelector("#floor-plan-draw-mode")?.value || "room";
-  const sel = document.querySelector("#floor-plan-target");
-  if (!sel || !floorPlanState?.layout) return;
-  const items =
-    mode === "place"
-      ? (floorPlanState.layout.places || []).map((p) => ({
-          id: p.id,
-          label: `${p.label}${p.rectangle ? "" : " · ohne Rechteck"}`,
-        }))
-      : (floorPlanState.layout.rooms || []).map((r) => ({
-          id: r.id,
-          label: `Raum ${r.number}${r.name ? " — " + r.name : ""}${r.rectangle ? "" : " · ohne Rechteck"}`,
-        }));
-  const prev = sel.value;
-  sel.innerHTML = items.length
-    ? items.map((it) => `<option value="${it.id}">${escapeHtml(it.label)}</option>`).join("")
-    : `<option value="">Keine Ziele</option>`;
-  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
-  sel.disabled = !items.length;
+  const targetSel = document.querySelector("#floor-plan-target");
+  const hint = document.querySelector("#floor-plan-hint");
+  if (!targetSel || !floorPlanState?.layout) return;
+  const rooms = floorPlanState.layout.rooms || [];
+  const prev = targetSel.value;
+  targetSel.innerHTML = rooms.length
+    ? rooms
+        .map(
+          (r) =>
+            `<option value="${r.id}">Raum ${escapeHtml(r.number)}${r.name ? " — " + escapeHtml(r.name) : ""}${r.rectangle ? "" : " · ohne Rechteck"}</option>`
+        )
+        .join("")
+    : `<option value="">Keine Räume</option>`;
+  if (prev && [...targetSel.options].some((o) => o.value === prev)) targetSel.value = prev;
+  targetSel.disabled = !rooms.length;
+  if (hint) {
+    hint.textContent = isAdmin()
+      ? "Mausrad zoomen, mittlere Maustaste/Alt+Ziehen verschieben, links Rechteck zeichnen."
+      : "Mausrad zoomen, mittlere Maustaste oder Alt+Ziehen verschieben.";
+  }
+  drawFloorPlanOverlay();
 }
 
 async function renderFloorPlanEditor(floorId) {
@@ -1026,10 +1246,10 @@ async function renderFloorPlanEditor(floorId) {
   const editor = document.querySelector("#floor-plan-editor");
   const empty = document.querySelector("#floor-plan-empty");
   const toolbar = document.querySelector("#floor-plan-toolbar");
-  const hint = document.querySelector("#floor-plan-hint");
   const msg = document.querySelector("#locations-msg");
 
   destroyFloorPlanEditor();
+  wireFloorPlanCanvasOnce();
   uploadBox?.classList.toggle("hidden", !isAdmin());
   toolbar?.classList.toggle("hidden", !isAdmin());
 
@@ -1040,7 +1260,10 @@ async function renderFloorPlanEditor(floorId) {
       layout,
       draft: null,
       drawing: false,
+      panning: false,
       start: null,
+      panLast: null,
+      view: { zoom: 1, panX: 0, panY: 0 },
       objectUrl: null,
       onResize: () => syncFloorPlanCanvasSize(),
     };
@@ -1049,8 +1272,7 @@ async function renderFloorPlanEditor(floorId) {
     if (!layout.plan?.image_url) {
       editor?.classList.add("hidden");
       empty?.classList.remove("hidden");
-      empty.textContent = "Noch kein Plan für dieses Stockwerk.";
-      if (hint) hint.textContent = "";
+      empty.textContent = "Noch kein Plan für dieses Stockwerk — als Admin oben ein Bild hochladen.";
       return;
     }
 
@@ -1059,15 +1281,11 @@ async function renderFloorPlanEditor(floorId) {
     const blob = await apiBlob(layout.plan.image_url, { auth: true });
     floorPlanState.objectUrl = URL.createObjectURL(blob);
     const img = document.querySelector("#floor-plan-image");
-    img.onload = () => syncFloorPlanCanvasSize();
+    img.onload = () => {
+      syncFloorPlanCanvasSize();
+      fillFloorPlanTargets();
+    };
     img.src = floorPlanState.objectUrl;
-    fillFloorPlanTargets();
-    if (hint) {
-      hint.textContent = isAdmin()
-        ? "Ziel wählen, dann auf dem Plan ein Rechteck aufziehen. Speichern erfolgt automatisch."
-        : "Räume (grün) und Plätze (orange) auf dem Plan.";
-    }
-    wireFloorPlanCanvasOnce();
   } catch (err) {
     editor?.classList.add("hidden");
     empty?.classList.remove("hidden");
@@ -1083,11 +1301,15 @@ function wireFloorPlanCanvasOnce() {
   floorPlanCanvasWired = true;
 
   const canvas = document.querySelector("#floor-plan-canvas");
-  const modeSel = document.querySelector("#floor-plan-draw-mode");
   const uploadBtn = document.querySelector("#btn-floor-plan-upload");
   const clearBtn = document.querySelector("#btn-floor-plan-clear-target");
+  const zoomInBtn = document.querySelector("#btn-floor-plan-zoom-in");
+  const zoomOutBtn = document.querySelector("#btn-floor-plan-zoom-out");
+  const zoomResetBtn = document.querySelector("#btn-floor-plan-zoom-reset");
 
-  modeSel?.addEventListener("change", () => fillFloorPlanTargets());
+  zoomInBtn?.addEventListener("click", () => floorPlanZoomAt(1.25));
+  zoomOutBtn?.addEventListener("click", () => floorPlanZoomAt(1 / 1.25));
+  zoomResetBtn?.addEventListener("click", () => floorPlanResetView());
 
   uploadBtn?.addEventListener("click", async () => {
     const msg = document.querySelector("#locations-msg");
@@ -1099,90 +1321,479 @@ function wireFloorPlanCanvasOnce() {
     }
     const fd = new FormData();
     fd.append("file", file);
-    // natural size can be filled after load; optional for now
+    uploadBtn.disabled = true;
+    const prevLabel = uploadBtn.textContent;
+    uploadBtn.textContent = "Lade hoch…";
     try {
       await apiUpload(`/api/v1/floors/${nav.floor.id}/plan`, fd, { auth: true });
       setMsg(msg, "ok", "Stockwerkplan hochgeladen.");
       await renderFloorPlanEditor(nav.floor.id);
     } catch (err) {
       setMsg(msg, "error", err.message || "Upload fehlgeschlagen.");
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = prevLabel;
     }
   });
 
   clearBtn?.addEventListener("click", async () => {
     const msg = document.querySelector("#locations-msg");
     clearMsg(msg);
-    const mode = document.querySelector("#floor-plan-draw-mode")?.value || "room";
     const targetId = document.querySelector("#floor-plan-target")?.value;
     if (!targetId) return;
     try {
-      const path =
-        mode === "place"
-          ? `/api/v1/places/${targetId}/rectangle`
-          : `/api/v1/rooms/${targetId}/rectangle`;
-      await api(path, { method: "PATCH", auth: true, body: { rectangle: null } });
-      setMsg(msg, "ok", "Rechteck entfernt.");
+      await api(`/api/v1/rooms/${targetId}/rectangle`, { method: "PATCH", auth: true, body: { rectangle: null } });
+      setMsg(msg, "ok", "Raum-Rechteck entfernt.");
       await renderFloorPlanEditor(nav.floor.id);
     } catch (err) {
       setMsg(msg, "error", err.message || "Löschen fehlgeschlagen.");
     }
   });
 
-  const toNorm = (e) => {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
-    };
-  };
+  canvas?.addEventListener(
+    "wheel",
+    (e) => {
+      if (!floorPlanState) return;
+      e.preventDefault();
+      floorPlanZoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
 
   canvas?.addEventListener("pointerdown", (e) => {
-    if (!isAdmin() || !floorPlanState) return;
-    const targetId = document.querySelector("#floor-plan-target")?.value;
-    if (!targetId) return;
+    if (!floorPlanState) return;
+    const wantsPan =
+      e.button === 1 || e.altKey || e.button === 2 || !isAdmin() || !document.querySelector("#floor-plan-target")?.value;
     canvas.setPointerCapture(e.pointerId);
+    if (wantsPan) {
+      e.preventDefault();
+      floorPlanState.panning = true;
+      floorPlanState.panLast = { x: e.clientX, y: e.clientY };
+      canvas.classList.add("is-panning");
+      canvas.classList.remove("is-drawing");
+      return;
+    }
+    if (e.button !== 0) return;
+    const local = floorPlanScreenToNorm(e);
+    if (!local) return;
     floorPlanState.drawing = true;
-    floorPlanState.start = toNorm(e);
-    floorPlanState.draft = { x: floorPlanState.start.x, y: floorPlanState.start.y, w: 0, h: 0 };
+    floorPlanState.start = local;
+    floorPlanState.draft = { x: local.x, y: local.y, w: 0, h: 0 };
+    canvas.classList.add("is-drawing");
   });
 
   canvas?.addEventListener("pointermove", (e) => {
-    if (!floorPlanState?.drawing || !floorPlanState.start) return;
-    const cur = toNorm(e);
-    const x = Math.min(floorPlanState.start.x, cur.x);
-    const y = Math.min(floorPlanState.start.y, cur.y);
-    const w = Math.abs(cur.x - floorPlanState.start.x);
-    const h = Math.abs(cur.y - floorPlanState.start.y);
-    floorPlanState.draft = { x, y, w, h };
+    if (!floorPlanState) return;
+    if (floorPlanState.panning && floorPlanState.panLast) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      floorPlanState.view.panX += (e.clientX - floorPlanState.panLast.x) * scaleX;
+      floorPlanState.view.panY += (e.clientY - floorPlanState.panLast.y) * scaleY;
+      floorPlanState.panLast = { x: e.clientX, y: e.clientY };
+      drawFloorPlanOverlay();
+      return;
+    }
+    if (!floorPlanState.drawing || !floorPlanState.start) return;
+    const cur = floorPlanScreenToNorm(e);
+    if (!cur) return;
+    floorPlanState.draft = {
+      x: Math.min(floorPlanState.start.x, cur.x),
+      y: Math.min(floorPlanState.start.y, cur.y),
+      w: Math.abs(cur.x - floorPlanState.start.x),
+      h: Math.abs(cur.y - floorPlanState.start.y),
+    };
     drawFloorPlanOverlay();
   });
 
-  canvas?.addEventListener("pointerup", async (e) => {
-    if (!floorPlanState?.drawing) return;
+  const endPointer = async () => {
+    if (!floorPlanState) return;
+    if (floorPlanState.panning) {
+      floorPlanState.panning = false;
+      floorPlanState.panLast = null;
+      canvas.classList.remove("is-panning");
+      return;
+    }
+    if (!floorPlanState.drawing) return;
     floorPlanState.drawing = false;
+    canvas.classList.remove("is-drawing");
     const draft = floorPlanState.draft;
     floorPlanState.draft = null;
     drawFloorPlanOverlay();
-    if (!draft || draft.w < 0.01 || draft.h < 0.01) return;
-
+    if (!draft || draft.w < 0.008 || draft.h < 0.008) return;
     const msg = document.querySelector("#locations-msg");
     clearMsg(msg);
-    const mode = document.querySelector("#floor-plan-draw-mode")?.value || "room";
     const targetId = document.querySelector("#floor-plan-target")?.value;
     if (!targetId) return;
     try {
-      const path =
-        mode === "place"
-          ? `/api/v1/places/${targetId}/rectangle`
-          : `/api/v1/rooms/${targetId}/rectangle`;
-      await api(path, { method: "PATCH", auth: true, body: { rectangle: draft } });
-      setMsg(msg, "ok", "Rechteck gespeichert.");
+      await api(`/api/v1/rooms/${targetId}/rectangle`, { method: "PATCH", auth: true, body: { rectangle: draft } });
+      setMsg(msg, "ok", "Raum-Rechteck gespeichert.");
       await renderFloorPlanEditor(nav.floor.id);
     } catch (err) {
-      setMsg(msg, "error", err.message || "Rechteck speichern fehlgeschlagen.");
+      setMsg(msg, "error", err.message || "Speichern fehlgeschlagen.");
       drawFloorPlanOverlay();
     }
+  };
+
+  canvas?.addEventListener("pointerup", endPointer);
+  canvas?.addEventListener("pointercancel", endPointer);
+  canvas?.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+function getRoomPlanSource() {
+  const img = roomPlanState?.imageEl;
+  const room = roomPlanState?.roomRect;
+  if (!img?.naturalWidth || !room) return null;
+  return {
+    sx: room.x * img.naturalWidth,
+    sy: room.y * img.naturalHeight,
+    sw: Math.max(1, room.w * img.naturalWidth),
+    sh: Math.max(1, room.h * img.naturalHeight),
+  };
+}
+
+function getRoomPlanDrawRect(canvas) {
+  const src = getRoomPlanSource();
+  if (!src || !roomPlanState) return null;
+  const view = roomPlanState.view || { zoom: 1, panX: 0, panY: 0 };
+  const base = Math.min(canvas.width / src.sw, canvas.height / src.sh) * 0.92;
+  const scale = base * view.zoom;
+  const dw = src.sw * scale;
+  const dh = src.sh * scale;
+  const dx = (canvas.width - dw) / 2 + view.panX;
+  const dy = (canvas.height - dh) / 2 + view.panY;
+  return { ...src, dx, dy, dw, dh, scale };
+}
+
+function syncRoomPlanCanvasSize() {
+  const canvas = document.querySelector("#room-plan-canvas");
+  const stage = document.querySelector("#room-plan-stage");
+  if (!canvas || !stage || !roomPlanState?.imageEl?.naturalWidth || !roomPlanState?.roomRect) return;
+  const w = Math.max(320, stage.clientWidth || 640);
+  const h = Math.max(420, stage.clientHeight || 480);
+  canvas.width = Math.round(w);
+  canvas.height = Math.round(h);
+  drawRoomPlanView();
+}
+
+function drawRoomPlanView() {
+  const canvas = document.querySelector("#room-plan-canvas");
+  if (!canvas || !roomPlanState?.imageEl?.naturalWidth || !roomPlanState?.roomRect) return;
+  const ctx = canvas.getContext("2d");
+  const img = roomPlanState.imageEl;
+  const draw = getRoomPlanDrawRect(canvas);
+  if (!draw) return;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#d8e1db";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, draw.sx, draw.sy, draw.sw, draw.sh, draw.dx, draw.dy, draw.dw, draw.dh);
+  ctx.strokeStyle = "rgba(15, 122, 101, 0.55)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(draw.dx + 0.5, draw.dy + 0.5, draw.dw - 1, draw.dh - 1);
+
+  const paintLocal = (local, fill, stroke, label) => {
+    if (!local) return;
+    const x = draw.dx + local.x * draw.dw;
+    const y = draw.dy + local.y * draw.dh;
+    const w = local.w * draw.dw;
+    const h = local.h * draw.dh;
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x, y, w, h);
+    if (label) {
+      ctx.fillStyle = stroke;
+      ctx.font = "600 12px Manrope, sans-serif";
+      ctx.fillText(label, x + 4, y + 14);
+    }
+  };
+
+  (roomPlanState.places || []).forEach((pl) => {
+    paintLocal(absToLocal(pl.rectangle, roomPlanState.roomRect), "rgba(196, 122, 46, 0.35)", "#a65d12", pl.number);
   });
+  if (roomPlanState.draft) {
+    paintLocal(roomPlanState.draft, "rgba(40, 90, 180, 0.3)", "#285ab4", "");
+  }
+}
+
+function roomPlanScreenToLocal(e) {
+  const canvas = document.querySelector("#room-plan-canvas");
+  const draw = getRoomPlanDrawRect(canvas);
+  if (!canvas || !draw || draw.dw <= 0 || draw.dh <= 0) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+  return {
+    x: Math.min(1, Math.max(0, (x - draw.dx) / draw.dw)),
+    y: Math.min(1, Math.max(0, (y - draw.dy) / draw.dh)),
+  };
+}
+
+function roomPlanZoomAt(factor, clientX, clientY) {
+  if (!roomPlanState?.view) return;
+  const canvas = document.querySelector("#room-plan-canvas");
+  if (!canvas) return;
+  const before = getRoomPlanDrawRect(canvas);
+  const nextZoom = Math.min(8, Math.max(0.4, roomPlanState.view.zoom * factor));
+  if (before && clientX != null && clientY != null) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = ((clientX - rect.left) / rect.width) * canvas.width;
+    const my = ((clientY - rect.top) / rect.height) * canvas.height;
+    const lx = (mx - before.dx) / before.dw;
+    const ly = (my - before.dy) / before.dh;
+    roomPlanState.view.zoom = nextZoom;
+    const after = getRoomPlanDrawRect(canvas);
+    if (after) {
+      roomPlanState.view.panX += mx - (after.dx + lx * after.dw);
+      roomPlanState.view.panY += my - (after.dy + ly * after.dh);
+    }
+  } else {
+    roomPlanState.view.zoom = nextZoom;
+  }
+  drawRoomPlanView();
+}
+
+function roomPlanResetView() {
+  if (!roomPlanState) return;
+  roomPlanState.view = { zoom: 1, panX: 0, panY: 0 };
+  drawRoomPlanView();
+}
+
+function fillRoomPlanTargets() {
+  const sel = document.querySelector("#room-plan-target");
+  const hint = document.querySelector("#room-plan-hint");
+  if (!sel || !roomPlanState) return;
+  const places = roomPlanState.places || [];
+  const prev = sel.value;
+  sel.innerHTML = places.length
+    ? places
+        .map(
+          (p) =>
+            `<option value="${p.id}">${escapeHtml(p.label || p.number)}${p.rectangle ? "" : " · ohne Rechteck"}</option>`
+        )
+        .join("")
+    : `<option value="">Keine Plätze — zuerst anlegen</option>`;
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  sel.disabled = !places.length;
+  if (hint) {
+    hint.textContent = isAdmin()
+      ? "Mausrad zoomen, mittlere Maustaste/Alt+Ziehen verschieben, links Rechteck zeichnen."
+      : "Mausrad zoomen, mittlere Maustaste oder Alt+Ziehen verschieben.";
+  }
+  drawRoomPlanView();
+}
+
+async function renderRoomPlanEditor(floorId, roomId) {
+  const editor = document.querySelector("#room-plan-editor");
+  const empty = document.querySelector("#room-plan-empty");
+  const toolbar = document.querySelector("#room-plan-toolbar");
+  const msg = document.querySelector("#locations-msg");
+
+  destroyRoomPlanEditor();
+  wireRoomPlanCanvasOnce();
+  toolbar?.classList.toggle("hidden", !isAdmin());
+
+  try {
+    const layout = await api(`/api/v1/floors/${floorId}/layout`, { auth: true });
+    const room = (layout.rooms || []).find((r) => r.id === roomId);
+    if (!layout.plan?.image_url) {
+      editor?.classList.add("hidden");
+      empty?.classList.remove("hidden");
+      empty.textContent = "Für dieses Stockwerk fehlt noch ein Plan.";
+      return;
+    }
+    if (!room?.rectangle) {
+      editor?.classList.add("hidden");
+      empty?.classList.remove("hidden");
+      empty.textContent = "Für diesen Raum fehlt noch ein Rechteck auf dem Stockwerkplan — bitte zuerst dort markieren.";
+      return;
+    }
+
+    empty?.classList.add("hidden");
+    editor?.classList.remove("hidden");
+
+    const blob = await apiBlob(layout.plan.image_url, { auth: true });
+    const objectUrl = URL.createObjectURL(blob);
+    const imageEl = new Image();
+    roomPlanState = {
+      floorId,
+      roomId,
+      roomRect: room.rectangle,
+      places: (layout.places || []).filter((p) => p.room_id === roomId),
+      draft: null,
+      drawing: false,
+      panning: false,
+      start: null,
+      panLast: null,
+      view: { zoom: 1, panX: 0, panY: 0 },
+      objectUrl,
+      imageEl,
+      onResize: () => syncRoomPlanCanvasSize(),
+    };
+    window.addEventListener("resize", roomPlanState.onResize);
+    imageEl.onload = () => {
+      syncRoomPlanCanvasSize();
+      fillRoomPlanTargets();
+    };
+    imageEl.src = objectUrl;
+  } catch (err) {
+    editor?.classList.add("hidden");
+    empty?.classList.remove("hidden");
+    empty.textContent = "Raumplan konnte nicht geladen werden.";
+    setMsg(msg, "error", err.message || "Raumplan laden fehlgeschlagen.");
+  }
+}
+
+let roomPlanCanvasWired = false;
+
+function wireRoomPlanCanvasOnce() {
+  if (roomPlanCanvasWired) return;
+  roomPlanCanvasWired = true;
+
+  const canvas = document.querySelector("#room-plan-canvas");
+  const clearBtn = document.querySelector("#btn-room-plan-clear-target");
+  const distributeBtn = document.querySelector("#btn-room-plan-distribute");
+  const zoomInBtn = document.querySelector("#btn-room-plan-zoom-in");
+  const zoomOutBtn = document.querySelector("#btn-room-plan-zoom-out");
+  const zoomResetBtn = document.querySelector("#btn-room-plan-zoom-reset");
+
+  zoomInBtn?.addEventListener("click", () => roomPlanZoomAt(1.25));
+  zoomOutBtn?.addEventListener("click", () => roomPlanZoomAt(1 / 1.25));
+  zoomResetBtn?.addEventListener("click", () => roomPlanResetView());
+
+  clearBtn?.addEventListener("click", async () => {
+    const msg = document.querySelector("#locations-msg");
+    clearMsg(msg);
+    const targetId = document.querySelector("#room-plan-target")?.value;
+    if (!targetId || !nav.floor?.id || !nav.room?.id) return;
+    try {
+      await api(`/api/v1/places/${targetId}/rectangle`, { method: "PATCH", auth: true, body: { rectangle: null } });
+      setMsg(msg, "ok", "Platz-Rechteck entfernt.");
+      await renderRoomPlanEditor(nav.floor.id, nav.room.id);
+    } catch (err) {
+      setMsg(msg, "error", err.message || "Löschen fehlgeschlagen.");
+    }
+  });
+
+  distributeBtn?.addEventListener("click", async () => {
+    const msg = document.querySelector("#locations-msg");
+    clearMsg(msg);
+    if (!roomPlanState?.roomRect) return;
+    const places = roomPlanState.places || [];
+    if (!places.length) {
+      setMsg(msg, "error", "Keine Plätze im Raum — zuerst anlegen.");
+      return;
+    }
+    const rects = distributeRectsInRoom(roomPlanState.roomRect, places.length);
+    distributeBtn.disabled = true;
+    try {
+      for (let i = 0; i < places.length; i++) {
+        await api(`/api/v1/places/${places[i].id}/rectangle`, {
+          method: "PATCH",
+          auth: true,
+          body: { rectangle: rects[i] },
+        });
+      }
+      setMsg(msg, "ok", `${places.length} Plätze verteilt.`);
+      await renderRoomPlanEditor(nav.floor.id, nav.room.id);
+    } catch (err) {
+      setMsg(msg, "error", err.message || "Verteilen fehlgeschlagen.");
+    } finally {
+      distributeBtn.disabled = false;
+    }
+  });
+
+  canvas?.addEventListener(
+    "wheel",
+    (e) => {
+      if (!roomPlanState) return;
+      e.preventDefault();
+      roomPlanZoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+
+  canvas?.addEventListener("pointerdown", (e) => {
+    if (!roomPlanState?.roomRect) return;
+    const wantsPan = e.button === 1 || e.altKey || e.button === 2 || !isAdmin() || !document.querySelector("#room-plan-target")?.value;
+    canvas.setPointerCapture(e.pointerId);
+    if (wantsPan) {
+      e.preventDefault();
+      roomPlanState.panning = true;
+      roomPlanState.panLast = { x: e.clientX, y: e.clientY };
+      canvas.classList.add("is-panning");
+      canvas.classList.remove("is-drawing");
+      return;
+    }
+    if (e.button !== 0) return;
+    const local = roomPlanScreenToLocal(e);
+    if (!local) return;
+    roomPlanState.drawing = true;
+    roomPlanState.start = local;
+    roomPlanState.draft = { x: local.x, y: local.y, w: 0, h: 0 };
+    canvas.classList.add("is-drawing");
+  });
+
+  canvas?.addEventListener("pointermove", (e) => {
+    if (!roomPlanState) return;
+    if (roomPlanState.panning && roomPlanState.panLast) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      roomPlanState.view.panX += (e.clientX - roomPlanState.panLast.x) * scaleX;
+      roomPlanState.view.panY += (e.clientY - roomPlanState.panLast.y) * scaleY;
+      roomPlanState.panLast = { x: e.clientX, y: e.clientY };
+      drawRoomPlanView();
+      return;
+    }
+    if (!roomPlanState.drawing || !roomPlanState.start) return;
+    const cur = roomPlanScreenToLocal(e);
+    if (!cur) return;
+    roomPlanState.draft = {
+      x: Math.min(roomPlanState.start.x, cur.x),
+      y: Math.min(roomPlanState.start.y, cur.y),
+      w: Math.abs(cur.x - roomPlanState.start.x),
+      h: Math.abs(cur.y - roomPlanState.start.y),
+    };
+    drawRoomPlanView();
+  });
+
+  const endPointer = async (e) => {
+    if (!roomPlanState) return;
+    if (roomPlanState.panning) {
+      roomPlanState.panning = false;
+      roomPlanState.panLast = null;
+      canvas.classList.remove("is-panning");
+      return;
+    }
+    if (!roomPlanState.drawing) return;
+    roomPlanState.drawing = false;
+    canvas.classList.remove("is-drawing");
+    const draft = roomPlanState.draft;
+    roomPlanState.draft = null;
+    drawRoomPlanView();
+    if (!draft || draft.w < 0.02 || draft.h < 0.02) return;
+    const abs = localToAbs(draft, roomPlanState.roomRect);
+    const msg = document.querySelector("#locations-msg");
+    clearMsg(msg);
+    const targetId = document.querySelector("#room-plan-target")?.value;
+    if (!targetId) return;
+    try {
+      await api(`/api/v1/places/${targetId}/rectangle`, { method: "PATCH", auth: true, body: { rectangle: abs } });
+      setMsg(msg, "ok", "Platz-Rechteck gespeichert.");
+      await renderRoomPlanEditor(nav.floor.id, nav.room.id);
+    } catch (err) {
+      setMsg(msg, "error", err.message || "Speichern fehlgeschlagen.");
+      drawRoomPlanView();
+    }
+  };
+
+  canvas?.addEventListener("pointerup", endPointer);
+  canvas?.addEventListener("pointercancel", endPointer);
+  canvas?.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
 function renderCreateForm() {
@@ -1219,9 +1830,14 @@ function renderCreateForm() {
       <label>Nummer<input name="number" required placeholder="101" /></label>
       <label>Name<input name="name" placeholder="optional" /></label>`;
   } else if (nav.level === "places") {
-    title.textContent = "Platz anlegen";
+    title.textContent = "Plätze anlegen";
     fields.innerHTML = `
-      <label>Nummer<input name="number" required placeholder="01" /></label>
+      <label>Anzahl
+        <input name="count" type="number" min="1" max="200" value="1" required />
+      </label>
+      <label id="place-number-wrap">Nummer (bei Anzahl 1)
+        <input name="number" placeholder="01" />
+      </label>
       <label>Platztyp<select name="place_type_id" required></select></label>
       <label>Buchungsmodus
         <select name="booking_mode">
@@ -1229,12 +1845,26 @@ function renderCreateForm() {
           <option value="hourly">stundenweise</option>
         </select>
       </label>
+      <label class="check-inline">
+        <input type="checkbox" name="distribute" />
+        Auf Stockwerkplan im Raum verteilen (Raum-Rechteck nötig)
+      </label>
+      <p class="hint">Bei Großräumen z. B. Anzahl 24 — Nummern werden automatisch vergeben (01, 02, …).</p>
       <fieldset class="equip-fieldset">
-        <legend>Ausstattungen (optional)</legend>
+        <legend>Ausstattungen (optional, für alle)</legend>
         <div id="create-equip-checkboxes" class="check-grid"></div>
       </fieldset>`;
     loadPlaceTypeOptions(fields.querySelector("select[name=place_type_id]"));
     loadEquipmentCheckboxes(fields.querySelector("#create-equip-checkboxes"));
+    const countInput = fields.querySelector("input[name=count]");
+    const numberWrap = fields.querySelector("#place-number-wrap");
+    const syncCountUi = () => {
+      const n = Number(countInput.value || 1);
+      numberWrap.classList.toggle("hidden", n !== 1);
+      numberWrap.querySelector("input").required = n === 1;
+    };
+    countInput.addEventListener("input", syncCountUi);
+    syncCountUi();
   }
 }
 
@@ -1341,16 +1971,42 @@ document.querySelector("#form-catalog-create").addEventListener("submit", async 
       });
     } else if (nav.level === "places") {
       const equipmentIds = [...e.target.querySelectorAll("input[name=equipment_id]:checked")].map((el) => el.value);
-      await api(`/api/v1/rooms/${nav.room.id}/places`, {
-        method: "POST",
-        auth: true,
-        body: {
-          number: fd.get("number"),
-          place_type_id: fd.get("place_type_id"),
-          booking_mode: fd.get("booking_mode"),
-          equipment_ids: equipmentIds,
-        },
-      });
+      const count = Number(fd.get("count") || 1);
+      const distribute = !!e.target.querySelector("input[name=distribute]")?.checked;
+      if (count > 1 || distribute) {
+        const result = await api(`/api/v1/rooms/${nav.room.id}/places/bulk`, {
+          method: "POST",
+          auth: true,
+          body: {
+            count: count < 1 ? 1 : count,
+            place_type_id: fd.get("place_type_id"),
+            booking_mode: fd.get("booking_mode"),
+            equipment_ids: equipmentIds,
+            distribute,
+          },
+        });
+        setMsg(msg, "ok", `${result.count || count} Plätze angelegt${distribute ? " und auf dem Plan verteilt" : ""}.`);
+      } else {
+        const number = String(fd.get("number") || "").trim();
+        if (!number) {
+          setMsg(msg, "error", "Nummer ist erforderlich.");
+          return;
+        }
+        await api(`/api/v1/rooms/${nav.room.id}/places`, {
+          method: "POST",
+          auth: true,
+          body: {
+            number,
+            place_type_id: fd.get("place_type_id"),
+            booking_mode: fd.get("booking_mode"),
+            equipment_ids: equipmentIds,
+          },
+        });
+        setMsg(msg, "ok", "Angelegt.");
+      }
+      e.target.reset();
+      await renderLocations();
+      return;
     }
     e.target.reset();
     setMsg(msg, "ok", "Angelegt.");

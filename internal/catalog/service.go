@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -638,6 +639,145 @@ func (s *Service) CreatePlace(ctx context.Context, tenantID, roomID uuid.UUID, n
 		return nil, auth.ErrNotFound("place not found")
 	}
 	return &places[0], nil
+}
+
+type CreatePlacesBulkInput struct {
+	Count        int
+	PlaceTypeID  uuid.UUID
+	BookingMode  string
+	EquipmentIDs []uuid.UUID
+	Distribute   bool
+}
+
+func (s *Service) CreatePlacesBulk(ctx context.Context, tenantID, roomID uuid.UUID, in CreatePlacesBulkInput) ([]Place, error) {
+	if err := s.requireRoom(ctx, tenantID, roomID); err != nil {
+		return nil, err
+	}
+	if in.Count < 1 || in.Count > 200 {
+		return nil, auth.ErrInvalidInput("count must be between 1 and 200")
+	}
+	bookingMode := strings.TrimSpace(in.BookingMode)
+	if bookingMode == "" {
+		bookingMode = "daily"
+	}
+	if bookingMode != "daily" && bookingMode != "hourly" {
+		return nil, auth.ErrInvalidInput("booking_mode must be daily or hourly")
+	}
+	if err := s.requirePlaceType(ctx, tenantID, in.PlaceTypeID); err != nil {
+		return nil, err
+	}
+	for _, eid := range in.EquipmentIDs {
+		if err := s.requireEquipment(ctx, tenantID, eid); err != nil {
+			return nil, err
+		}
+	}
+
+	existing, err := s.ListPlaces(ctx, tenantID, roomID)
+	if err != nil {
+		return nil, err
+	}
+	used := map[string]bool{}
+	maxN := 0
+	for _, p := range existing {
+		used[p.Number] = true
+		var v int
+		if _, scanErr := fmt.Sscanf(p.Number, "%d", &v); scanErr == nil && v > maxN {
+			maxN = v
+		}
+	}
+	numbers := make([]string, 0, in.Count)
+	for i := maxN + 1; len(numbers) < in.Count; i++ {
+		num := fmt.Sprintf("%02d", i)
+		if used[num] {
+			continue
+		}
+		numbers = append(numbers, num)
+	}
+
+	var placeRects []Rect
+	if in.Distribute {
+		var raw []byte
+		if err := s.pool.QueryRow(ctx, `SELECT rectangle FROM rooms WHERE id = $1`, roomID).Scan(&raw); err != nil {
+			return nil, fmt.Errorf("load room rectangle: %w", err)
+		}
+		roomRect := decodeRect(raw)
+		if roomRect == nil {
+			return nil, auth.ErrInvalidInput("room has no rectangle on the floor plan — draw the room first or disable distribute")
+		}
+		placeRects = distributeRectsInRoom(*roomRect, in.Count)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	ids := make([]uuid.UUID, 0, in.Count)
+	for i, number := range numbers {
+		var placeID uuid.UUID
+		var rectRaw []byte
+		if len(placeRects) > i {
+			var err error
+			rectRaw, err = encodeRect(&placeRects[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+		err = tx.QueryRow(ctx, `
+			INSERT INTO places (room_id, number, place_type_id, booking_mode, rectangle)
+			VALUES ($1, $2, $3, $4::booking_mode, $5)
+			RETURNING id
+		`, roomID, number, in.PlaceTypeID, bookingMode, rectRaw).Scan(&placeID)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return nil, auth.ErrConflict("place number conflict — retry")
+			}
+			return nil, fmt.Errorf("create place: %w", err)
+		}
+		for _, eid := range in.EquipmentIDs {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO place_equipments (place_id, equipment_id) VALUES ($1, $2)
+			`, placeID, eid); err != nil {
+				return nil, fmt.Errorf("assign equipment: %w", err)
+			}
+		}
+		ids = append(ids, placeID)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return s.listPlacesByIDs(ctx, ids)
+}
+
+func distributeRectsInRoom(roomRect Rect, count int) []Rect {
+	if count < 1 {
+		return nil
+	}
+	cols := int(math.Ceil(math.Sqrt(float64(count))))
+	rows := int(math.Ceil(float64(count) / float64(cols)))
+	gapX := roomRect.W * 0.04
+	gapY := roomRect.H * 0.04
+	cellW := (roomRect.W - gapX*float64(cols+1)) / float64(cols)
+	cellH := (roomRect.H - gapY*float64(rows+1)) / float64(rows)
+	if cellW < 0.01 {
+		cellW = 0.01
+	}
+	if cellH < 0.01 {
+		cellH = 0.01
+	}
+	out := make([]Rect, 0, count)
+	for i := 0; i < count; i++ {
+		c := i % cols
+		r := i / cols
+		out = append(out, Rect{
+			X: roomRect.X + gapX + float64(c)*(cellW+gapX),
+			Y: roomRect.Y + gapY + float64(r)*(cellH+gapY),
+			W: cellW,
+			H: cellH,
+		})
+	}
+	return out
 }
 
 func (s *Service) DeletePlace(ctx context.Context, tenantID, placeID uuid.UUID) error {
