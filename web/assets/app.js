@@ -4,7 +4,9 @@ const views = {
   login: document.querySelector("#view-login"),
   register: document.querySelector("#view-register"),
   verify: document.querySelector("#view-verify"),
+  invite: document.querySelector("#view-invite"),
   home: document.querySelector("#view-home"),
+  users: document.querySelector("#view-users"),
   locations: document.querySelector("#view-locations"),
   placeTypes: document.querySelector("#view-place-types"),
   equipments: document.querySelector("#view-equipments"),
@@ -20,18 +22,30 @@ const nav = {
   room: null,
 };
 
-const NAV_ITEMS = [
-  ["Konto", "/app"],
-  ["Standorte", "/app/locations"],
-  ["Platztypen", "/app/place-types"],
-  ["Ausstattung", "/app/equipments"],
-  ["Buchungen", "/app/bookings"],
-];
+function navItems() {
+  if (isAdmin()) {
+    return [
+      ["Konto", "/app"],
+      ["Mitarbeiter", "/app/users"],
+      ["Standorte", "/app/locations"],
+      ["Platztypen", "/app/place-types"],
+      ["Ausstattung", "/app/equipments"],
+      ["Buchungen", "/app/bookings"],
+    ];
+  }
+  if (currentUser && currentUser.role === "employee") {
+    return [
+      ["Konto", "/app"],
+      ["Buchungen", "/app/bookings"],
+    ];
+  }
+  return [["Konto", "/app"]];
+}
 
 function paintNav() {
   document.querySelectorAll("[data-app-nav]").forEach((el) => {
     const active = el.getAttribute("data-app-nav");
-    el.innerHTML = NAV_ITEMS.map(([label, href]) => {
+    el.innerHTML = navItems().map(([label, href]) => {
       const cls = label === active ? "nav-link is-active" : "nav-link";
       return `<a href="${href}" class="${cls}">${label}</a>`;
     }).join("") + `<button type="button" class="secondary" data-logout>Abmelden</button>`;
@@ -68,9 +82,36 @@ function isAdmin() {
 }
 
 function applyAdminVisibility() {
+  const admin = isAdmin();
   document.querySelectorAll(".admin-only").forEach((el) => {
-    el.classList.toggle("hidden", !isAdmin());
+    el.classList.toggle("hidden", !admin);
   });
+  document.querySelectorAll(".employee-only").forEach((el) => {
+    el.classList.toggle("hidden", !(currentUser && currentUser.role === "employee"));
+  });
+}
+
+function landingPath() {
+  return currentUser && currentUser.role === "employee" ? "/app/bookings" : "/app";
+}
+
+function isAdminPath(path) {
+  return (
+    path === "/app/users" ||
+    path === "/app/locations" ||
+    path === "/app/place-types" ||
+    path === "/app/equipments"
+  );
+}
+
+function roleLabel(role) {
+  return (
+    {
+      tenant_admin: "Mandanten-Admin",
+      employee: "Mitarbeiter",
+      platform_admin: "Platform-Admin",
+    }[role] || role
+  );
 }
 
 async function requireSession() {
@@ -97,11 +138,24 @@ async function route() {
     if (token) await runVerify(token);
     return;
   }
+  if (path === "/invite") {
+    show("invite");
+    const token = params.get("token") || "";
+    const input = document.querySelector("#invite-token");
+    if (token && input) input.value = token;
+    return;
+  }
   if (path === "/login" || path === "/") {
     if (getToken()) {
       try {
+        await requireSession();
+        history.replaceState({}, "", landingPath());
+        if (landingPath() === "/app/bookings") {
+          show("bookings");
+          await renderBookingsPage();
+          return;
+        }
         await loadHome();
-        history.replaceState({}, "", "/app");
         return;
       } catch {
         setToken("");
@@ -126,6 +180,23 @@ async function route() {
       return;
     }
 
+    if (!isAdmin() && isAdminPath(path)) {
+      const dest = currentUser.role === "employee" ? "/app/bookings" : "/app";
+      history.replaceState({}, "", dest);
+      if (dest === "/app/bookings") {
+        show("bookings");
+        await renderBookingsPage();
+        return;
+      }
+      await loadHome();
+      return;
+    }
+
+    if (path === "/app/users") {
+      show("users");
+      await renderUsers();
+      return;
+    }
     if (path === "/app/locations") {
       show("locations");
       await renderLocations();
@@ -158,8 +229,12 @@ async function loadHome() {
   const me = await requireSession();
   show("home");
   document.querySelector("#home-name").textContent = me.display_name || me.email;
+  document.querySelector("#home-lead-extra").textContent =
+    me.role === "employee"
+      ? ". Du kannst Plätze buchen — die Verwaltung bleibt beim Administrator."
+      : "";
   document.querySelector("#home-email").textContent = me.email;
-  document.querySelector("#home-role").textContent = me.role;
+  document.querySelector("#home-role").textContent = roleLabel(me.role);
   document.querySelector("#home-tenant").textContent = me.tenant_id || "— (Platform)";
   document.querySelector("#home-provider").textContent = me.identity_provider;
 }
@@ -204,8 +279,9 @@ document.querySelector("#form-login").addEventListener("submit", async (e) => {
       },
     });
     setToken(out.token);
-    history.pushState({}, "", "/app");
-    await loadHome();
+    currentUser = out.user;
+    history.pushState({}, "", landingPath());
+    await route();
   } catch (err) {
     setMsg(msg, "error", err.message || "Login fehlgeschlagen.");
   } finally {
@@ -2097,14 +2173,89 @@ document.querySelector("#form-equipment").addEventListener("submit", async (e) =
   }
 });
 
-function toLocalInputValue(date) {
-  const d = new Date(date);
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
+function ensureClockOptions() {
+  document.querySelectorAll("select[data-clock='hour']").forEach((sel) => {
+    if (sel.options.length) return;
+    const min = Number(sel.dataset.min || 0);
+    const max = Number(sel.dataset.max || 23);
+    for (let h = min; h <= max; h++) {
+      const v = String(h).padStart(2, "0");
+      sel.add(new Option(v, v));
+    }
+  });
+  document.querySelectorAll("select[data-clock='minute']").forEach((sel) => {
+    if (sel.options.length) return;
+    for (let m = 0; m < 60; m += 15) {
+      const v = String(m).padStart(2, "0");
+      sel.add(new Option(v, v));
+    }
+  });
 }
 
-function fromLocalInputValue(value) {
-  return new Date(value).toISOString();
+function snapQuarterHHMM(hhmm, dir = "round") {
+  const match = /^(\d{1,2}):(\d{2})/.exec(hhmm || "");
+  if (!match) return "";
+  let total = Number(match[1]) * 60 + Number(match[2]);
+  if (dir === "ceil") total = Math.ceil(total / 15) * 15;
+  else if (dir === "floor") total = Math.floor(total / 15) * 15;
+  else total = Math.round(total / 15) * 15;
+  total = Math.max(0, Math.min(24 * 60, total));
+  if (total === 24 * 60) return "24:00";
+  const hour = Math.floor(total / 60);
+  const minute = total % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function quarterSlot(start, end) {
+  const a = snapQuarterHHMM(start, "ceil");
+  const b = snapQuarterHHMM(end, "floor");
+  const aMin = clockToMinutes(a);
+  const bMin = clockToMinutes(b === "24:00" ? "00:00" : b);
+  if (aMin == null || bMin == null || bMin <= aMin) return null;
+  return { start: a, end: b };
+}
+
+function setClock(hourSel, minuteSel, hhmm) {
+  if (!hourSel || !minuteSel) return;
+  const snapped = snapQuarterHHMM(hhmm);
+  const match = /^(\d{2}):(\d{2})$/.exec(snapped);
+  if (!match) return;
+  if ([...hourSel.options].some((o) => o.value === match[1])) hourSel.value = match[1];
+  if ([...minuteSel.options].some((o) => o.value === match[2])) minuteSel.value = match[2];
+}
+
+function readClock(hourSel, minuteSel) {
+  if (!hourSel?.value || !minuteSel?.value) return "";
+  return `${hourSel.value}:${minuteSel.value}`;
+}
+
+function clockToMinutes(hhmm) {
+  const match = /^(\d{2}):(\d{2})$/.exec(hhmm || "");
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function localStampToISO(date, hhmm) {
+  const mins = clockToMinutes(hhmm);
+  if (!date || mins == null) return "";
+  const [hour, minute] = hhmm.split(":");
+  const parsed = new Date(`${date}T${hour}:${minute}:00`);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString();
+}
+
+function formatDateTimeDE(iso) {
+  return new Date(iso).toLocaleString("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  });
 }
 
 function mondayOf(date = new Date()) {
@@ -2138,19 +2289,527 @@ function formatWeekLabel(startISO, endISO) {
 let myWeekStart = formatISODate(mondayOf());
 let roomWeekStart = formatISODate(mondayOf());
 
+let bookingPlanState = null;
+let bookingPlanLoadSeq = 0;
+let bookingPlanWired = false;
+
+function destroyBookingPlan() {
+  if (bookingPlanState?.objectUrl) URL.revokeObjectURL(bookingPlanState.objectUrl);
+  if (bookingPlanState?.onResize) window.removeEventListener("resize", bookingPlanState.onResize);
+  if (bookingPlanState?.imageEl) {
+    bookingPlanState.imageEl.onload = null;
+    bookingPlanState.imageEl.onerror = null;
+  }
+  bookingPlanState = null;
+  const canvas = document.querySelector("#booking-plan-canvas");
+  if (canvas) canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function hideBookingPlan() {
+  bookingPlanLoadSeq += 1;
+  document.querySelector("#booking-plan-box")?.classList.add("hidden");
+  destroyBookingPlan();
+}
+
+function setBookingPlanStatus(kind, message) {
+  const tools = document.querySelector("#booking-plan-tools");
+  const legend = document.querySelector("#booking-plan-legend");
+  const hint = document.querySelector("#booking-plan-hint");
+  const empty = document.querySelector("#booking-plan-empty");
+  const caption = document.querySelector("#booking-plan-caption");
+  if (kind === "loading") {
+    tools?.classList.add("hidden");
+    legend?.classList.add("hidden");
+    empty?.classList.add("hidden");
+    if (hint) hint.textContent = "Plan wird geladen…";
+    if (caption) caption.textContent = "";
+    return;
+  }
+  if (kind === "empty") {
+    tools?.classList.add("hidden");
+    legend?.classList.add("hidden");
+    if (hint) hint.textContent = "";
+    if (caption) caption.textContent = "";
+    if (empty) {
+      empty.textContent = message || "Kein Plan vorhanden.";
+      empty.classList.remove("hidden");
+    }
+    return;
+  }
+  tools?.classList.remove("hidden");
+  legend?.classList.remove("hidden");
+  empty?.classList.add("hidden");
+}
+
+function bookingPlanRoomCaption(room) {
+  if (!room) return "";
+  if (room.name) return `Raum ${room.number} — ${room.name}`;
+  return room.number ? `Raum ${room.number}` : "Raum";
+}
+
+function syncBookingPlanChrome() {
+  const state = bookingPlanState;
+  if (!state?.ready) return;
+  const floorBtn = document.querySelector("#btn-booking-plan-floor");
+  const roomBtn = document.querySelector("#btn-booking-plan-room");
+  const hint = document.querySelector("#booking-plan-hint");
+  const caption = document.querySelector("#booking-plan-caption");
+  const room = (state.layout.rooms || []).find((r) => r.id === state.roomId);
+  const canRoom = !!room?.rectangle;
+  if (floorBtn) floorBtn.setAttribute("aria-pressed", state.mode === "floor" ? "true" : "false");
+  if (roomBtn) {
+    roomBtn.disabled = !canRoom;
+    roomBtn.setAttribute("aria-pressed", state.mode === "room" ? "true" : "false");
+    roomBtn.title = canRoom
+      ? "Raumausschnitt anzeigen"
+      : room
+        ? "Dieser Raum ist auf dem Stockwerkplan noch nicht markiert"
+        : "Zuerst einen Raum wählen";
+  }
+  if (caption) caption.textContent = room ? `· ${bookingPlanRoomCaption(room)}` : "";
+  if (!hint) return;
+  if (state.mode === "room") {
+    const places = (state.layout.places || []).filter((p) => p.room_id === state.roomId);
+    const unmarked = places.some((p) => !p.rectangle);
+    hint.textContent = unmarked
+      ? "Ausschnitt des gewählten Raums. Nicht alle Plätze haben eine Position. Mausrad zoomen, Ziehen verschiebt den Plan."
+      : "Ausschnitt des gewählten Raums. Mausrad zoomen, Ziehen verschiebt den Plan.";
+    return;
+  }
+  hint.textContent = room && !room.rectangle
+    ? "Dieser Raum ist auf dem Plan noch nicht markiert. Andere Räume lassen sich anklicken. Mausrad zoomen, Ziehen verschiebt den Plan."
+    : "Klick auf einen Raum wählt ihn und öffnet den Raumplan. Mausrad zoomen, Ziehen verschiebt den Plan.";
+}
+
+function applyBookingPlanSelection(roomId) {
+  const state = bookingPlanState;
+  if (!state?.ready) return;
+  const prevMode = state.mode;
+  state.roomId = roomId || "";
+  const room = (state.layout.rooms || []).find((r) => r.id === state.roomId);
+  state.roomRect = room?.rectangle || null;
+  if (state.mode === "room" && !state.roomRect) {
+    state.mode = "floor";
+    state.view = { zoom: 1, panX: 0, panY: 0 };
+  }
+  syncBookingPlanChrome();
+  if (state.mode !== prevMode) syncBookingPlanCanvasSize();
+  else drawBookingPlan();
+}
+
+function setBookingPlanMode(mode) {
+  const state = bookingPlanState;
+  if (!state?.ready) return;
+  if (mode === "room") {
+    const room = (state.layout.rooms || []).find((r) => r.id === state.roomId);
+    if (!room?.rectangle) return;
+    state.roomRect = room.rectangle;
+  }
+  if (state.mode === mode) return;
+  state.mode = mode;
+  state.view = { zoom: 1, panX: 0, panY: 0 };
+  syncBookingPlanChrome();
+  syncBookingPlanCanvasSize();
+}
+
+function getBookingPlanDrawRect(canvas) {
+  const img = bookingPlanState?.imageEl;
+  if (!img?.naturalWidth || !bookingPlanState) return null;
+  const view = bookingPlanState.view || { zoom: 1, panX: 0, panY: 0 };
+  let sx = 0;
+  let sy = 0;
+  let sw = img.naturalWidth;
+  let sh = img.naturalHeight;
+  if (bookingPlanState.mode === "room" && bookingPlanState.roomRect) {
+    const room = bookingPlanState.roomRect;
+    sx = room.x * img.naturalWidth;
+    sy = room.y * img.naturalHeight;
+    sw = Math.max(1, room.w * img.naturalWidth);
+    sh = Math.max(1, room.h * img.naturalHeight);
+  }
+  const fit = bookingPlanState.mode === "room" ? 0.92 : 0.98;
+  const base = Math.min(canvas.width / sw, canvas.height / sh) * fit;
+  const scale = base * view.zoom;
+  const dw = sw * scale;
+  const dh = sh * scale;
+  return {
+    sx,
+    sy,
+    sw,
+    sh,
+    dx: (canvas.width - dw) / 2 + view.panX,
+    dy: (canvas.height - dh) / 2 + view.panY,
+    dw,
+    dh,
+  };
+}
+
+function syncBookingPlanCanvasSize() {
+  const canvas = document.querySelector("#booking-plan-canvas");
+  const stage = document.querySelector("#booking-plan-stage");
+  if (!canvas || !stage || !bookingPlanState?.ready) return;
+  const w = Math.max(280, stage.clientWidth || 640);
+  const h = Math.max(240, stage.clientHeight || 360);
+  canvas.width = Math.round(w);
+  canvas.height = Math.round(h);
+  drawBookingPlan();
+}
+
+function paintBookingPlanRect(ctx, x, y, w, h, fill, stroke, label, lineWidth) {
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = lineWidth;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  if (!label || w < 18 || h < 14) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+  ctx.clip();
+  const size = Math.max(11, Math.min(15, Math.floor(Math.min(w, h) * 0.42)));
+  ctx.font = `600 ${size}px Manrope, sans-serif`;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+  ctx.strokeText(label, x + 4, y + size + 2);
+  ctx.fillStyle = stroke;
+  ctx.fillText(label, x + 4, y + size + 2);
+  ctx.restore();
+}
+
+function drawBookingPlan() {
+  const canvas = document.querySelector("#booking-plan-canvas");
+  const state = bookingPlanState;
+  const img = state?.imageEl;
+  if (!canvas || !state?.ready || !img?.naturalWidth) return;
+  const ctx = canvas.getContext("2d");
+  const draw = getBookingPlanDrawRect(canvas);
+  if (!draw) return;
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#d8e1db";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, draw.sx, draw.sy, draw.sw, draw.sh, draw.dx, draw.dy, draw.dw, draw.dh);
+
+  if (state.mode === "room" && state.roomRect) {
+    ctx.strokeStyle = "rgba(15, 122, 101, 0.55)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(draw.dx + 0.5, draw.dy + 0.5, draw.dw - 1, draw.dh - 1);
+    (state.layout.places || [])
+      .filter((pl) => pl.room_id === state.roomId)
+      .forEach((pl) => {
+        const local = absToLocal(pl.rectangle, state.roomRect);
+        if (!local) return;
+        paintBookingPlanRect(
+          ctx,
+          draw.dx + local.x * draw.dw,
+          draw.dy + local.y * draw.dh,
+          local.w * draw.dw,
+          local.h * draw.dh,
+          "rgba(196, 122, 46, 0.35)",
+          "#a65d12",
+          pl.number,
+          2
+        );
+      });
+    return;
+  }
+
+  const rooms = state.layout.rooms || [];
+  rooms.forEach((rm) => {
+    if (!rm.rectangle || rm.id === state.roomId) return;
+    paintBookingPlanRect(
+      ctx,
+      draw.dx + rm.rectangle.x * draw.dw,
+      draw.dy + rm.rectangle.y * draw.dh,
+      rm.rectangle.w * draw.dw,
+      rm.rectangle.h * draw.dh,
+      "rgba(15, 122, 77, 0.16)",
+      "#0f7a65",
+      rm.number,
+      2
+    );
+  });
+  const selected = rooms.find((rm) => rm.id === state.roomId && rm.rectangle);
+  if (selected) {
+    paintBookingPlanRect(
+      ctx,
+      draw.dx + selected.rectangle.x * draw.dw,
+      draw.dy + selected.rectangle.y * draw.dh,
+      selected.rectangle.w * draw.dw,
+      selected.rectangle.h * draw.dh,
+      "rgba(15, 122, 101, 0.42)",
+      "#0b4f42",
+      selected.number,
+      3
+    );
+  }
+}
+
+function bookingPlanScreenToNorm(e) {
+  const canvas = document.querySelector("#booking-plan-canvas");
+  const draw = canvas ? getBookingPlanDrawRect(canvas) : null;
+  if (!canvas || !draw || draw.dw <= 0 || draw.dh <= 0) return null;
+  const rect = canvas.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
+  const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
+  return {
+    x: (x - draw.dx) / draw.dw,
+    y: (y - draw.dy) / draw.dh,
+  };
+}
+
+function pointInNormRect(norm, rect) {
+  if (!norm || !rect) return false;
+  return norm.x >= rect.x && norm.y >= rect.y && norm.x <= rect.x + rect.w && norm.y <= rect.y + rect.h;
+}
+
+function hitBookingPlanTarget(norm) {
+  const state = bookingPlanState;
+  if (!state?.ready || !norm) return null;
+  if (state.mode === "room" && state.roomRect) {
+    let best = null;
+    let bestArea = Infinity;
+    (state.layout.places || [])
+      .filter((pl) => pl.room_id === state.roomId)
+      .forEach((pl) => {
+        const local = absToLocal(pl.rectangle, state.roomRect);
+        if (!pointInNormRect(norm, local)) return;
+        const area = local.w * local.h;
+        if (area < bestArea) {
+          best = { kind: "place", label: pl.label || pl.number };
+          bestArea = area;
+        }
+      });
+    return best;
+  }
+  let best = null;
+  let bestArea = Infinity;
+  (state.layout.rooms || []).forEach((rm) => {
+    if (!pointInNormRect(norm, rm.rectangle)) return;
+    const area = rm.rectangle.w * rm.rectangle.h;
+    if (area < bestArea) {
+      best = { kind: "room", id: rm.id, label: bookingPlanRoomCaption(rm) };
+      bestArea = area;
+    }
+  });
+  return best;
+}
+
+function bookingPlanZoomAt(factor, clientX, clientY) {
+  const state = bookingPlanState;
+  if (!state?.ready) return;
+  const canvas = document.querySelector("#booking-plan-canvas");
+  if (!canvas) return;
+  const before = getBookingPlanDrawRect(canvas);
+  const nextZoom = Math.min(8, Math.max(0.4, state.view.zoom * factor));
+  if (before && clientX != null && clientY != null) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = ((clientX - rect.left) / rect.width) * canvas.width;
+    const my = ((clientY - rect.top) / rect.height) * canvas.height;
+    const lx = (mx - before.dx) / before.dw;
+    const ly = (my - before.dy) / before.dh;
+    state.view.zoom = nextZoom;
+    const after = getBookingPlanDrawRect(canvas);
+    if (after) {
+      state.view.panX += mx - (after.dx + lx * after.dw);
+      state.view.panY += my - (after.dy + ly * after.dh);
+    }
+  } else {
+    state.view.zoom = nextZoom;
+  }
+  drawBookingPlan();
+}
+
+async function chooseBookingRoom(roomId) {
+  const roomSel = document.querySelector("#room-week-select");
+  if (!roomSel || ![...roomSel.options].some((o) => o.value === roomId)) return;
+  if (bookingPlanState?.ready) {
+    const room = (bookingPlanState.layout.rooms || []).find((r) => r.id === roomId);
+    bookingPlanState.roomId = roomId;
+    bookingPlanState.roomRect = room?.rectangle || null;
+    if (room?.rectangle) {
+      bookingPlanState.mode = "room";
+      bookingPlanState.view = { zoom: 1, panX: 0, panY: 0 };
+    }
+  }
+  roomSel.value = roomId;
+  writeRoomWeekFilter({
+    locationId: document.querySelector("#room-week-location")?.value || "",
+    buildingId: document.querySelector("#room-week-building")?.value || "",
+    floorId: document.querySelector("#room-week-floor")?.value || "",
+    roomId,
+  });
+  await loadRoomWeek();
+}
+
+async function refreshBookingPlan() {
+  const box = document.querySelector("#booking-plan-box");
+  if (!box) return;
+  const floorId = document.querySelector("#room-week-floor")?.value || "";
+  const roomId = document.querySelector("#room-week-select")?.value || "";
+  if (!floorId) {
+    hideBookingPlan();
+    return;
+  }
+
+  box.classList.remove("hidden");
+  if (bookingPlanState?.floorId === floorId && bookingPlanState.ready) {
+    applyBookingPlanSelection(roomId);
+    requestAnimationFrame(() => syncBookingPlanCanvasSize());
+    return;
+  }
+
+  const seq = ++bookingPlanLoadSeq;
+  setBookingPlanStatus("loading");
+  wireBookingPlanOnce();
+  try {
+    const layout = await api(`/api/v1/floors/${floorId}/layout`, { auth: true });
+    if (seq !== bookingPlanLoadSeq) return;
+    if (!layout.plan?.image_url) {
+      destroyBookingPlan();
+      setBookingPlanStatus("empty", "Für dieses Stockwerk ist noch kein Plan hinterlegt.");
+      return;
+    }
+    const blob = await apiBlob(layout.plan.image_url, { auth: true });
+    if (seq !== bookingPlanLoadSeq) return;
+    destroyBookingPlan();
+    const objectUrl = URL.createObjectURL(blob);
+    const imageEl = new Image();
+    const room = (layout.rooms || []).find((r) => r.id === roomId);
+    bookingPlanState = {
+      floorId,
+      roomId,
+      layout,
+      roomRect: room?.rectangle || null,
+      mode: room?.rectangle ? "room" : "floor",
+      view: { zoom: 1, panX: 0, panY: 0 },
+      objectUrl,
+      imageEl,
+      ready: false,
+      panning: false,
+      panLast: null,
+      moved: false,
+      onResize: () => syncBookingPlanCanvasSize(),
+    };
+    window.addEventListener("resize", bookingPlanState.onResize);
+    imageEl.onload = () => {
+      if (seq !== bookingPlanLoadSeq || !bookingPlanState || bookingPlanState.floorId !== floorId) return;
+      bookingPlanState.ready = true;
+      setBookingPlanStatus("ready");
+      syncBookingPlanChrome();
+      syncBookingPlanCanvasSize();
+    };
+    imageEl.onerror = () => {
+      if (seq !== bookingPlanLoadSeq) return;
+      destroyBookingPlan();
+      setBookingPlanStatus("empty", "Planbild konnte nicht geladen werden.");
+    };
+    imageEl.src = objectUrl;
+  } catch (err) {
+    if (seq !== bookingPlanLoadSeq) return;
+    destroyBookingPlan();
+    setBookingPlanStatus("empty", "Plan konnte nicht geladen werden.");
+    setMsg(document.querySelector("#bookings-msg"), "error", err.message || "Lageplan laden fehlgeschlagen.");
+  }
+}
+
+function wireBookingPlanOnce() {
+  if (bookingPlanWired) return;
+  bookingPlanWired = true;
+  const canvas = document.querySelector("#booking-plan-canvas");
+  document.querySelector("#btn-booking-plan-floor")?.addEventListener("click", () => setBookingPlanMode("floor"));
+  document.querySelector("#btn-booking-plan-room")?.addEventListener("click", () => setBookingPlanMode("room"));
+  document.querySelector("#btn-booking-plan-zoom-in")?.addEventListener("click", () => bookingPlanZoomAt(1.25));
+  document.querySelector("#btn-booking-plan-zoom-out")?.addEventListener("click", () => bookingPlanZoomAt(1 / 1.25));
+  document.querySelector("#btn-booking-plan-zoom-reset")?.addEventListener("click", () => {
+    if (!bookingPlanState) return;
+    bookingPlanState.view = { zoom: 1, panX: 0, panY: 0 };
+    drawBookingPlan();
+  });
+
+  canvas?.addEventListener(
+    "wheel",
+    (e) => {
+      if (!bookingPlanState?.ready) return;
+      e.preventDefault();
+      bookingPlanZoomAt(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+    },
+    { passive: false }
+  );
+
+  canvas?.addEventListener("pointerdown", (e) => {
+    if (!bookingPlanState?.ready || e.button !== 0) return;
+    canvas.setPointerCapture(e.pointerId);
+    bookingPlanState.panning = true;
+    bookingPlanState.moved = false;
+    bookingPlanState.panLast = { x: e.clientX, y: e.clientY };
+    bookingPlanState.downNorm = bookingPlanScreenToNorm(e);
+  });
+
+  canvas?.addEventListener("pointermove", (e) => {
+    if (!bookingPlanState?.ready) return;
+    if (bookingPlanState.panning && bookingPlanState.panLast) {
+      const dx = e.clientX - bookingPlanState.panLast.x;
+      const dy = e.clientY - bookingPlanState.panLast.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) {
+        bookingPlanState.moved = true;
+        canvas.classList.add("is-panning");
+      }
+      const rect = canvas.getBoundingClientRect();
+      bookingPlanState.view.panX += dx * (canvas.width / rect.width);
+      bookingPlanState.view.panY += dy * (canvas.height / rect.height);
+      bookingPlanState.panLast = { x: e.clientX, y: e.clientY };
+      drawBookingPlan();
+      return;
+    }
+    const hit = hitBookingPlanTarget(bookingPlanScreenToNorm(e));
+    canvas.title = hit?.label || "";
+    canvas.style.cursor = hit?.kind === "room" ? "pointer" : "grab";
+  });
+
+  const endBookingPlanPointer = (e) => {
+    if (!bookingPlanState?.panning) return;
+    const moved = bookingPlanState.moved;
+    const norm = bookingPlanState.downNorm;
+    bookingPlanState.panning = false;
+    bookingPlanState.panLast = null;
+    canvas.classList.remove("is-panning");
+    if (moved || bookingPlanState.mode !== "floor") return;
+    const hit = hitBookingPlanTarget(norm || bookingPlanScreenToNorm(e));
+    if (hit?.kind === "room") void chooseBookingRoom(hit.id);
+  };
+  canvas?.addEventListener("pointerup", endBookingPlanPointer);
+  canvas?.addEventListener("pointercancel", () => {
+    if (!bookingPlanState) return;
+    bookingPlanState.panning = false;
+    bookingPlanState.panLast = null;
+    canvas.classList.remove("is-panning");
+  });
+  canvas?.addEventListener("pointerleave", () => {
+    if (!canvas || bookingPlanState?.panning) return;
+    canvas.style.cursor = "grab";
+  });
+}
+
 async function renderBookingsPage() {
   const msg = document.querySelector("#bookings-msg");
   clearMsg(msg);
+  bookingPlanLoadSeq += 1;
+  destroyBookingPlan();
   const form = document.querySelector("#form-booking-search");
   const emptyHint = document.querySelector("#bookings-empty-hint");
-  if (!form.starts_at.value) {
+  ensureClockOptions();
+  if (form.start_date && !form.start_date.value) {
     const start = new Date();
     start.setMinutes(0, 0, 0);
     start.setHours(start.getHours() + 1);
     const end = new Date(start);
     end.setHours(end.getHours() + 8);
-    form.starts_at.value = toLocalInputValue(start);
-    form.ends_at.value = toLocalInputValue(end);
+    form.start_date.value = formatISODate(start);
+    form.end_date.value = formatISODate(end);
+    setClock(form.start_hour, form.start_minute, `${String(start.getHours()).padStart(2, "0")}:00`);
+    setClock(form.end_hour, form.end_minute, `${String(end.getHours()).padStart(2, "0")}:00`);
   }
 
   const [locs, types, equips] = await Promise.all([
@@ -2159,7 +2818,21 @@ async function renderBookingsPage() {
     api("/api/v1/equipments", { auth: true }),
   ]);
   if (emptyHint) {
-    emptyHint.classList.toggle("hidden", (locs.items || []).length > 0);
+    const hasLocations = (locs.items || []).length > 0;
+    emptyHint.classList.toggle("hidden", hasLocations);
+    const emptyText = document.querySelector("#bookings-empty-text");
+    const emptyActions = document.querySelector("#bookings-empty-actions");
+    if (!hasLocations && emptyText && emptyActions) {
+      if (isAdmin()) {
+        emptyText.textContent =
+          "Zuerst unter Standorte eine Hierarchie anlegen — oder den Beispiel-Standort erzeugen.";
+        emptyActions.innerHTML = `<a class="button" href="/app/locations">Zu Standorten</a>`;
+      } else {
+        emptyText.textContent =
+          "Es sind noch keine Plätze eingerichtet. Bitte wende dich an deine Administration.";
+        emptyActions.innerHTML = "";
+      }
+    }
   }
 
   const locSel = form.location_id;
@@ -2361,6 +3034,7 @@ async function loadMyWeek() {
 }
 
 async function loadRoomWeek() {
+  void refreshBookingPlan();
   const roomSel = document.querySelector("#room-week-select");
   const label = document.querySelector("#room-week-label");
   const table = document.querySelector("#room-week-grid");
@@ -2400,11 +3074,14 @@ async function loadRoomWeek() {
           .map((day) => {
             const clickable = day.status === "free" || day.status === "partial";
             const cls = `cell-${day.status}${clickable ? " cell-bookable" : ""}`;
-            const title = clickable
-              ? `${place.label} am ${day.date} — Zeiten anzeigen / buchen`
-              : statusLabel[day.status] || day.status;
+            const busy = busyRangeLabel(day.segments);
+            const title = busy
+              ? `${place.label}: belegt ${busy}`
+              : clickable
+                ? `${place.label} am ${day.date} — Zeiten anzeigen / buchen`
+                : statusLabel[day.status] || day.status;
             const bar = renderOccupancyBar(day.segments || [], day.status);
-            return `<td class="${cls}" title="${title}" data-place-id="${place.id}" data-place-label="${escapeHtml(place.label)}" data-date="${day.date}" data-mode="${place.booking_mode}" data-status="${day.status}"><div>${statusLabel[day.status] || day.status}</div>${bar}</td>`;
+            return `<td class="${cls}" title="${escapeHtml(title)}" data-place-id="${place.id}" data-place-label="${escapeHtml(place.label)}" data-date="${day.date}" data-mode="${place.booking_mode}" data-status="${day.status}"><div>${statusLabel[day.status] || day.status}</div>${bar}</td>`;
           })
           .join("");
         return `<tr><td class="place-col">${escapeHtml(place.label)}</td>${cells}</tr>`;
@@ -2445,6 +3122,67 @@ function renderOccupancyBar(segments, status) {
   return `<div class="occupancy-bar">${parts}</div>`;
 }
 
+function renderDayAxisHTML() {
+  const start = 8 * 60;
+  const end = 18 * 60;
+  let html = "";
+  for (let mins = start; mins <= end; mins += 15) {
+    const pct = ((mins - start) / (end - start)) * 100;
+    const onHour = mins % 60 === 0;
+    const edge = pct === 0 ? " is-start" : pct === 100 ? " is-end" : "";
+    html += `<span class="day-axis-tick${onHour ? " hour" : ""}" style="left:${pct}%"></span>`;
+    if (onHour) {
+      html += `<span class="day-axis-label${edge}" style="left:${pct}%">${String(mins / 60).padStart(2, "0")}</span>`;
+    }
+  }
+  return html;
+}
+
+function pctToQuarter(pct) {
+  const mins = Math.round((8 * 60 + (Number(pct) / 100) * 10 * 60) / 15) * 15;
+  if (mins < 8 * 60 || mins > 18 * 60) return "";
+  const hour = Math.floor(mins / 60);
+  const minute = mins % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function busyRangeLabel(segments) {
+  return (segments || [])
+    .filter((s) => s.kind === "busy" && (s.end_pct || 0) > (s.start_pct || 0))
+    .map((s) => {
+      const a = pctToQuarter(s.start_pct);
+      const b = pctToQuarter(s.end_pct);
+      return a && b && a !== b ? `${a}–${b}` : "";
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+function renderWeekTimeline(detail) {
+  const timeline = document.querySelector("#week-book-timeline");
+  const axis = document.querySelector("#week-book-axis");
+  const caption = document.querySelector("#week-book-busy");
+  if (!timeline || !axis) return;
+  timeline.innerHTML = (detail.segments || [])
+    .map((s) => {
+      const left = s.start_pct || 0;
+      const width = Math.max(0, (s.end_pct || 0) - left);
+      return `<span class="seg-${s.kind}" style="left:${left}%;width:${width}%"></span>`;
+    })
+    .join("");
+  axis.innerHTML = renderDayAxisHTML();
+  const busy = detail.busy || [];
+  if (caption) {
+    caption.textContent = busy.length ? `Belegt: ${busy.map((b) => `${b.start}–${b.end}`).join(", ")}` : "";
+  }
+  timeline.setAttribute(
+    "aria-label",
+    busy.length
+      ? `Belegt ${busy.map((b) => `${b.start} bis ${b.end}`).join(", ")}`
+      : "Keine Belegung zwischen 08:00 und 18:00"
+  );
+}
+
 async function openWeekBookDialog({ placeId, label, date, mode, status }) {
   const form = document.querySelector("#form-week-book");
   const summary = document.querySelector("#week-book-summary");
@@ -2460,6 +3198,10 @@ async function openWeekBookDialog({ placeId, label, date, mode, status }) {
   form.date.value = date;
   summary.textContent = `${label} · ${nice}`;
   timeline.innerHTML = "";
+  const axis = document.querySelector("#week-book-axis");
+  if (axis) axis.innerHTML = renderDayAxisHTML();
+  const busyCap = document.querySelector("#week-book-busy");
+  if (busyCap) busyCap.textContent = "";
   slots.innerHTML = `<p class="hint">Lade freie Zeiten…</p>`;
 
   const fullRadio = form.querySelector('input[name=scope][value=full]');
@@ -2476,6 +3218,9 @@ async function openWeekBookDialog({ placeId, label, date, mode, status }) {
   if (status === "partial") {
     partialRadio.checked = true;
   }
+  ensureClockOptions();
+  setClock(form.start_hour, form.start_minute, "09:00");
+  setClock(form.end_hour, form.end_minute, "12:00");
   syncWeekBookPartialVisibility();
   form.classList.remove("hidden");
   form.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -2485,21 +3230,27 @@ async function openWeekBookDialog({ placeId, label, date, mode, status }) {
       `/api/v1/bookings/place-day?place_id=${encodeURIComponent(placeId)}&date=${encodeURIComponent(date)}`,
       { auth: true }
     );
-    timeline.innerHTML = (detail.segments || [])
-      .map((s) => {
-        const left = s.start_pct || 0;
-        const width = Math.max(0, (s.end_pct || 0) - left);
-        return `<span class="seg-${s.kind}" style="left:${left}%;width:${width}%"></span>`;
-      })
-      .join("");
+    renderWeekTimeline(detail);
 
-    if (!(detail.free || []).length) {
+    const free = (detail.free || [])
+      .map((slot) => quarterSlot(slot.start, slot.end))
+      .filter(Boolean);
+    if (!free.length) {
       slots.innerHTML = `<p class="hint">Keine freien Zeiten an diesem Tag.</p>`;
       return;
     }
+    const applySlot = (start, end) => {
+      form.querySelector('input[name=scope][value=partial]').checked = true;
+      setClock(form.start_hour, form.start_minute, start);
+      setClock(form.end_hour, form.end_minute, end);
+      syncWeekBookPartialVisibility();
+    };
+    if (form.querySelector('input[name=scope][value=partial]')?.checked) {
+      applySlot(free[0].start, free[0].end);
+    }
     slots.innerHTML =
-      `<p class="hint">Freie Zeiten (08:00–18:00) — Klick übernimmt den Zeitraum:</p>` +
-      detail.free
+      `<p class="hint">Freie Zeiten (08:00–18:00), in 15-Minuten-Schritten — Klick übernimmt den Zeitraum:</p>` +
+      free
         .map(
           (slot) =>
             `<button type="button" class="secondary" data-start="${slot.start}" data-end="${slot.end}">${slot.start}–${slot.end}</button>`
@@ -2507,10 +3258,7 @@ async function openWeekBookDialog({ placeId, label, date, mode, status }) {
         .join("");
     slots.querySelectorAll("button[data-start]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        form.querySelector('input[name=scope][value=partial]').checked = true;
-        form.start_time.value = btn.getAttribute("data-start");
-        form.end_time.value = btn.getAttribute("data-end");
-        syncWeekBookPartialVisibility();
+        applySlot(btn.getAttribute("data-start"), btn.getAttribute("data-end"));
       });
     });
   } catch (err) {
@@ -2544,24 +3292,38 @@ document.querySelector("#form-week-book")?.addEventListener("submit", async (e) 
   let startTime = "08:00";
   let endTime = "18:00";
   if (scope === "partial") {
-    startTime = form.start_time.value;
-    endTime = form.end_time.value;
-    if (!startTime || !endTime || endTime <= startTime) {
+    startTime = readClock(form.start_hour, form.start_minute);
+    endTime = readClock(form.end_hour, form.end_minute);
+    const startMin = clockToMinutes(startTime);
+    const endMin = clockToMinutes(endTime);
+    if (startMin == null || endMin == null || endMin <= startMin) {
       setMsg(msg, "error", "Bitte gültigen Zeitraum wählen (Bis nach Von).");
       return;
     }
+    if (startMin < 8 * 60 || endMin > 18 * 60) {
+      setMsg(msg, "error", "Buchungen sind zwischen 08:00 und 18:00 möglich.");
+      return;
+    }
+    if (startMin % 15 !== 0 || endMin % 15 !== 0) {
+      setMsg(msg, "error", "Minuten nur in 15-Minuten-Schritten (00, 15, 30, 45).");
+      return;
+    }
   }
-  const starts = new Date(`${date}T${startTime}:00`);
-  const ends = new Date(`${date}T${endTime}:00`);
-  const nice = starts.toLocaleDateString("de-DE");
+  const startsAt = localStampToISO(date, startTime);
+  const endsAt = localStampToISO(date, endTime);
+  if (!startsAt || !endsAt) {
+    setMsg(msg, "error", "Bitte gültigen Zeitraum wählen (Bis nach Von).");
+    return;
+  }
+  const nice = new Date(startsAt).toLocaleDateString("de-DE");
   try {
     await api("/api/v1/bookings", {
       method: "POST",
       auth: true,
       body: {
         place_id: placeId,
-        starts_at: starts.toISOString(),
-        ends_at: ends.toISOString(),
+        starts_at: startsAt,
+        ends_at: endsAt,
       },
     });
     form.classList.add("hidden");
@@ -2595,6 +3357,10 @@ async function loadMyBookings() {
   list.innerHTML = `<li class="empty">Lade…</li>`;
   try {
     const data = await api("/api/v1/bookings/mine", { auth: true });
+    if (!data.items?.length) {
+      list.innerHTML = `<li class="empty">Keine anstehenden Buchungen.</li>`;
+      return;
+    }
     renderList(list, data.items, (item) => {
       const actions = [];
       if (item.can_check_in) {
@@ -2641,7 +3407,7 @@ async function loadMyBookings() {
       }
       return {
         title: item.place_label || "Buchung",
-        subtitle: `${bookingStatusLabel(item.status)} · ${new Date(item.starts_at).toLocaleString("de-DE")} – ${new Date(item.ends_at).toLocaleString("de-DE")}`,
+        subtitle: `${bookingStatusLabel(item.status)} · ${formatDateTimeDE(item.starts_at)} – ${formatDateTimeDE(item.ends_at)}`,
         actions,
       };
     });
@@ -2657,9 +3423,16 @@ document.querySelector("#form-booking-search").addEventListener("submit", async 
   const list = document.querySelector("#booking-search-list");
   clearMsg(msg);
   const fd = new FormData(e.target);
+  const startsAt = localStampToISO(fd.get("start_date"), `${fd.get("start_hour")}:${fd.get("start_minute")}`);
+  const endsAt = localStampToISO(fd.get("end_date"), `${fd.get("end_hour")}:${fd.get("end_minute")}`);
+  if (!startsAt || !endsAt || endsAt <= startsAt) {
+    setMsg(msg, "error", "Bitte gültigen Zeitraum wählen (Bis nach Von).");
+    list.innerHTML = "";
+    return;
+  }
   const params = new URLSearchParams({
-    starts_at: fromLocalInputValue(fd.get("starts_at")),
-    ends_at: fromLocalInputValue(fd.get("ends_at")),
+    starts_at: startsAt,
+    ends_at: endsAt,
   });
   if (fd.get("location_id")) params.set("location_id", fd.get("location_id"));
   if (fd.get("place_type_id")) params.set("place_type_id", fd.get("place_type_id"));
@@ -2702,6 +3475,244 @@ document.querySelector("#form-booking-search").addEventListener("submit", async 
   } catch (err) {
     list.innerHTML = "";
     setMsg(msg, "error", err.message || "Suche fehlgeschlagen.");
+  }
+});
+
+document.querySelector("#form-invite").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#invite-msg");
+  const btn = e.target.querySelector("button[type=submit]");
+  clearMsg(msg);
+  const fd = new FormData(e.target);
+  const password = String(fd.get("password") || "");
+  const password2 = String(fd.get("password2") || "");
+  if (password !== password2) {
+    setMsg(msg, "error", "Die Passwörter stimmen nicht überein.");
+    return;
+  }
+  btn.disabled = true;
+  try {
+    await api("/api/v1/auth/accept-invite", {
+      method: "POST",
+      body: { token: fd.get("token"), password },
+    });
+    setMsg(msg, "ok", "Passwort gesetzt. Du kannst dich jetzt anmelden.");
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Einladung konnte nicht angenommen werden.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function memberStatus(member) {
+  if (member.disabled_at) return { label: "Deaktiviert", cls: "badge busy" };
+  if (!member.email_verified_at) return { label: "Einladung offen", cls: "badge warn" };
+  return { label: "Aktiv", cls: "badge free" };
+}
+
+function renderMemberList(items) {
+  const list = document.querySelector("#users-list");
+  if (!items.length) {
+    list.innerHTML = `<li class="empty">Noch niemand in diesem Mandanten.</li>`;
+    return;
+  }
+  list.innerHTML = items
+    .map((member) => {
+      const status = memberStatus(member);
+      const actions = [];
+      if (!member.disabled_at && !member.email_verified_at) {
+        actions.push(
+          `<button type="button" class="secondary" data-user-action="invite" data-user-id="${member.id}">Erneut einladen</button>`,
+        );
+      }
+      if (member.id !== currentUser.id) {
+        if (member.disabled_at) {
+          actions.push(
+            `<button type="button" class="secondary" data-user-action="enable" data-user-id="${member.id}">Aktivieren</button>`,
+          );
+        } else {
+          actions.push(
+            `<button type="button" class="secondary" data-user-action="disable" data-user-id="${member.id}">Deaktivieren</button>`,
+          );
+        }
+      }
+      return `<li>
+        <div class="item-main">
+          <strong>${escapeHtml(member.display_name || member.email)}</strong>
+          <span>${escapeHtml(member.email)} · ${escapeHtml(roleLabel(member.role))}</span>
+        </div>
+        <div class="item-actions">
+          <span class="${status.cls}">${status.label}</span>
+          ${actions.join("")}
+        </div>
+      </li>`;
+    })
+    .join("");
+}
+
+async function renderUsers({ keepMessage = false } = {}) {
+  const msg = document.querySelector("#users-msg");
+  if (!keepMessage) {
+    clearMsg(msg);
+    const result = document.querySelector("#import-result");
+    if (result) result.innerHTML = "";
+  }
+  const list = document.querySelector("#users-list");
+  list.innerHTML = `<li class="empty">Lade…</li>`;
+  try {
+    const data = await api("/api/v1/users", { auth: true });
+    renderMemberList(data.items || []);
+  } catch (err) {
+    list.innerHTML = "";
+    setMsg(msg, "error", err.message || "Mitarbeiter konnten nicht geladen werden.");
+  }
+}
+
+function showInviteLink(msg, text, token) {
+  if (!token) {
+    setMsg(msg, "ok", text);
+    return;
+  }
+  const link = `/invite?token=${encodeURIComponent(token)}`;
+  msg.className = "msg show ok";
+  msg.innerHTML = `${escapeHtml(text)} <a href="${link}">Einladungslink öffnen</a>`;
+}
+
+document.querySelector("#form-user-create").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#users-msg");
+  const btn = e.target.querySelector("button[type=submit]");
+  clearMsg(msg);
+  btn.disabled = true;
+  const fd = new FormData(e.target);
+  try {
+    const out = await api("/api/v1/users", {
+      method: "POST",
+      auth: true,
+      body: {
+        display_name: fd.get("display_name"),
+        email: fd.get("email"),
+      },
+    });
+    e.target.reset();
+    document.querySelector("#import-result").innerHTML = "";
+    showInviteLink(msg, "Einladung verschickt.", out.invite_token);
+    await renderUsers({ keepMessage: true });
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Einladung fehlgeschlagen.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function renderImportResult(result) {
+  const el = document.querySelector("#import-result");
+  const rows = result.rows || [];
+  const problems = rows.filter((row) => row.status !== "created");
+  const created = rows.filter((row) => row.status === "created" && row.invite_token);
+  const bits = [
+    `<span class="badge free">${result.created || 0} eingeladen</span>`,
+    `<span class="badge muted">${result.skipped || 0} übersprungen</span>`,
+    `<span class="badge busy">${result.failed || 0} fehlerhaft</span>`,
+  ];
+  const details = problems
+    .map(
+      (row) =>
+        `<li><div class="item-main"><strong>Zeile ${row.row}${row.email ? `: ${escapeHtml(row.email)}` : ""}</strong><span>${escapeHtml(row.message || row.status)}</span></div></li>`,
+    )
+    .join("");
+  const links = created
+    .map((row) => {
+      const href = `/invite?token=${encodeURIComponent(row.invite_token)}`;
+      return `<li><div class="item-main"><strong>${escapeHtml(row.display_name || row.email)}</strong><span><a href="${href}">Einladungslink</a></span></div></li>`;
+    })
+    .join("");
+  el.innerHTML =
+    `<div class="import-summary">${bits.join("")}</div>` +
+    (links ? `<p class="hint">Einladungslinks (nur in der Entwicklung):</p><ul class="list">${links}</ul>` : "") +
+    (details ? `<ul class="list">${details}</ul>` : "");
+}
+
+document.querySelector("#form-user-import").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#users-msg");
+  const btn = e.target.querySelector("button[type=submit]");
+  clearMsg(msg);
+  const fd = new FormData(e.target);
+  if (!fd.get("file") || !fd.get("file").name) {
+    setMsg(msg, "error", "Bitte eine Datei wählen.");
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const out = await apiUpload("/api/v1/users/import", fd, { auth: true });
+    e.target.reset();
+    renderImportResult(out);
+    const type = out.failed > 0 && out.created === 0 ? "error" : "ok";
+    setMsg(
+      msg,
+      type,
+      `${out.created} eingeladen, ${out.skipped} übersprungen, ${out.failed} fehlerhaft.`,
+    );
+    await renderUsers({ keepMessage: true });
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Import fehlgeschlagen.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+async function downloadTemplate(format) {
+  const res = await fetch(`/api/v1/users/import-template?format=${encodeURIComponent(format)}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  if (!res.ok) {
+    let message = "Vorlage konnte nicht geladen werden.";
+    try {
+      const data = await res.json();
+      message = data.message || message;
+    } catch {
+      /* ignore */
+    }
+    setMsg(document.querySelector("#users-msg"), "error", message);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = format === "xlsx" ? "mitarbeiter-vorlage.xlsx" : "mitarbeiter-vorlage.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.querySelector("#btn-template-csv").addEventListener("click", () => downloadTemplate("csv"));
+document.querySelector("#btn-template-xlsx").addEventListener("click", () => downloadTemplate("xlsx"));
+
+document.querySelector("#users-list").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-user-action]");
+  if (!btn) return;
+  const msg = document.querySelector("#users-msg");
+  clearMsg(msg);
+  btn.disabled = true;
+  const id = btn.getAttribute("data-user-id");
+  const action = btn.getAttribute("data-user-action");
+  try {
+    if (action === "invite") {
+      const out = await api(`/api/v1/users/${id}/invite`, { method: "POST", auth: true });
+      showInviteLink(msg, "Einladung erneut verschickt.", out.invite_token);
+    } else {
+      await api(`/api/v1/users/${id}`, {
+        method: "PATCH",
+        auth: true,
+        body: { disabled: action === "disable" },
+      });
+      setMsg(msg, "ok", action === "disable" ? "Konto deaktiviert." : "Konto aktiviert.");
+    }
+    await renderUsers({ keepMessage: true });
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Aktion fehlgeschlagen.");
+    btn.disabled = false;
   }
 });
 

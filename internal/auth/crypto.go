@@ -13,6 +13,7 @@ import (
 const (
 	PurposeTenantConfirm = "tenant_confirm"
 	PurposeSession       = "session"
+	PurposeInvite        = "invite"
 )
 
 func HashPassword(password string) (string, error) {

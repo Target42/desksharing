@@ -100,6 +100,11 @@ func BerlinLocation() *time.Location {
 	return berlinLocation()
 }
 
+func onQuarterHour(t time.Time) bool {
+	local := t.In(berlinLocation())
+	return local.Second() == 0 && local.Nanosecond() == 0 && local.Minute()%15 == 0
+}
+
 func berlinLocation() *time.Location {
 	loc, err := time.LoadLocation("Europe/Berlin")
 	if err != nil {
@@ -356,27 +361,11 @@ func (s *Service) RoomWeek(ctx context.Context, tenantID, roomID uuid.UUID, week
 					dayIntervals = append(dayIntervals, it)
 				}
 			}
-			cell.BookingCount = 0
-			hasBlock := false
-			hasDaily := false
+			cell.Status = statusForDay(dayStart, dayIntervals, true)
 			for _, it := range dayIntervals {
-				if it.mode == "block" {
-					hasBlock = true
-					continue
+				if it.mode != "block" {
+					cell.BookingCount++
 				}
-				cell.BookingCount++
-				if it.mode == "daily" {
-					hasDaily = true
-				}
-			}
-			if hasBlock && cell.BookingCount == 0 {
-				cell.Status = DayBlocked
-			} else if cell.BookingCount == 0 {
-				cell.Status = DayFree
-			} else if hasDaily || coverageFullBusinessDay(dayStart, dayIntervals) {
-				cell.Status = DayFull
-			} else {
-				cell.Status = DayPartial
 			}
 			cell.Segments = daySegments(dayStart, dayIntervals, cell.Status)
 			row.Days = append(row.Days, cell)
@@ -463,33 +452,7 @@ func (s *Service) PlaceDay(ctx context.Context, tenantID, placeID uuid.UUID, dat
 		return nil, err
 	}
 
-	status := DayFree
-	if !roomOK || !active {
-		status = DayBlocked
-	} else {
-		bookingCount := 0
-		hasDaily := false
-		hasBlock := false
-		for _, it := range intervals {
-			if it.mode == "block" {
-				hasBlock = true
-				continue
-			}
-			bookingCount++
-			if mode == "daily" {
-				hasDaily = true
-			}
-		}
-		if hasBlock && bookingCount == 0 {
-			status = DayBlocked
-		} else if bookingCount == 0 {
-			status = DayFree
-		} else if hasDaily || coverageFullBusinessDay(dayStart, intervals) {
-			status = DayFull
-		} else {
-			status = DayPartial
-		}
-	}
+	status := statusForDay(dayStart, intervals, roomOK && active)
 
 	busySpans := busyBusinessSpans(dayStart, intervals)
 	freeSpans := freeBusinessSpans(dayStart, busySpans)
@@ -647,6 +610,34 @@ func daySegments(dayStart time.Time, intervals []timeInterval, status DayStatus)
 		}
 	}
 	return segs
+}
+
+// statusForDay classifies a business day from the actual occupied intervals.
+// A shorter booking stays partial even when the place is booked by the day,
+// so the remaining hours can still be reserved.
+func statusForDay(dayStart time.Time, intervals []timeInterval, bookable bool) DayStatus {
+	if !bookable {
+		return DayBlocked
+	}
+	bookingCount := 0
+	hasBlock := false
+	for _, it := range intervals {
+		if it.mode == "block" {
+			hasBlock = true
+			continue
+		}
+		bookingCount++
+	}
+	if hasBlock && bookingCount == 0 {
+		return DayBlocked
+	}
+	if bookingCount == 0 {
+		return DayFree
+	}
+	if coverageFullBusinessDay(dayStart, intervals) {
+		return DayFull
+	}
+	return DayPartial
 }
 
 func coverageFullBusinessDay(dayStart time.Time, intervals []timeInterval) bool {

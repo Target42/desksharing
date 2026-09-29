@@ -182,6 +182,9 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUI
 	if !endsAt.After(startsAt) {
 		return nil, auth.ErrInvalidInput("ends_at must be after starts_at")
 	}
+	if !onQuarterHour(startsAt) || !onQuarterHour(endsAt) {
+		return nil, auth.ErrInvalidInput("Zeiten nur in 15-Minuten-Schritten (00, 15, 30, 45)")
+	}
 	_ = s.ReleaseNoShows(ctx, tenantID)
 
 	var bookingMode string
@@ -249,7 +252,9 @@ func (s *Service) ListMine(ctx context.Context, tenantID, userID uuid.UUID) ([]B
 		LEFT JOIN floors f ON f.id = rm.floor_id
 		LEFT JOIN buildings b ON b.id = f.building_id
 		WHERE bk.tenant_id = $1 AND bk.user_id = $2
-		ORDER BY bk.starts_at DESC
+		  AND bk.status <> 'cancelled'
+		  AND bk.ends_at > now()
+		ORDER BY bk.starts_at
 		LIMIT 100
 	`, tenantID, userID)
 	if err != nil {

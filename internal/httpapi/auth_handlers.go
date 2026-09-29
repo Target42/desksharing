@@ -59,6 +59,22 @@ func (h AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
+func (h AuthHandlers) AcceptInvite(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, auth.ErrInvalidInput("Ungültiger JSON-Body"))
+		return
+	}
+	if err := h.Service.AcceptInvite(r.Context(), body.Token, body.Password); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+}
+
 func (h AuthHandlers) Me(w http.ResponseWriter, r *http.Request) {
 	user, ok := UserFromContext(r.Context())
 	if !ok {

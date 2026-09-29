@@ -64,6 +64,21 @@
         </form>
       </section>
 
+      <section id="view-invite" class="panel hidden">
+        <h1 class="brand">Desksharing</h1>
+        <p class="lead">Lege ein Passwort fest, um die Einladung anzunehmen.</p>
+        <div id="invite-msg" class="msg" role="status"></div>
+        <form id="form-invite">
+          <label>Einladungs-Token<input id="invite-token" name="token" required /></label>
+          <label>Passwort (min. 8 Zeichen)<input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
+          <label>Passwort wiederholen<input name="password2" type="password" minlength="8" required autocomplete="new-password" /></label>
+          <div class="actions">
+            <button type="submit">Passwort setzen</button>
+            <a class="button secondary" href="/login">Zur Anmeldung</a>
+          </div>
+        </form>
+      </section>
+
       <section id="view-verify" class="panel hidden">
         <h1 class="brand">Desksharing</h1>
         <p class="lead">E-Mail-Adresse bzw. Mandantenregistrierung bestätigen.</p>
@@ -81,16 +96,57 @@
         <div class="app-header">
           <div>
             <h1 class="brand">Desksharing</h1>
-            <p class="lead">Angemeldet als <strong id="home-name"></strong></p>
+            <p class="lead" id="home-lead">Angemeldet als <strong id="home-name"></strong><span id="home-lead-extra"></span></p>
           </div>
           <nav class="app-nav" data-app-nav="Konto"></nav>
         </div>
         <ul class="meta">
           <li><span>E-Mail</span><strong id="home-email"></strong></li>
           <li><span>Rolle</span><strong id="home-role"></strong></li>
-          <li><span>Mandant</span><strong id="home-tenant" class="mono"></strong></li>
-          <li><span>Identity Provider</span><strong id="home-provider"></strong></li>
+          <li class="admin-only hidden"><span>Mandant</span><strong id="home-tenant" class="mono"></strong></li>
+          <li class="admin-only hidden"><span>Identity Provider</span><strong id="home-provider"></strong></li>
         </ul>
+        <div class="actions employee-only hidden" id="home-employee-actions">
+          <a class="button" href="/app/bookings">Arbeitsplatz buchen</a>
+        </div>
+      </section>
+
+      <section id="view-users" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Mitarbeiter</h1>
+            <p class="lead">Einzeln einladen oder per CSV- bzw. Excel-Datei importieren. Jede Person bekommt einen Link, um ein Passwort zu setzen.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Mitarbeiter"></nav>
+        </div>
+        <div id="users-msg" class="msg" role="status"></div>
+        <div class="split">
+          <div>
+            <div class="section-head"><h2>Team</h2></div>
+            <ul class="list" id="users-list"></ul>
+          </div>
+          <div class="side-stack">
+            <form id="form-user-create" class="create-box">
+              <h3>Einzeln einladen</h3>
+              <label>Name<input name="display_name" required placeholder="Alex Beispiel" /></label>
+              <label>E-Mail<input name="email" type="email" required /></label>
+              <div class="actions"><button type="submit">Einladen</button></div>
+            </form>
+            <form id="form-user-import" class="create-box">
+              <h3>Datei importieren</h3>
+              <p class="hint">CSV oder Excel (.xlsx). Spalten <strong>E-Mail</strong> und <strong>Name</strong>, erste Zeile ist die Überschrift. Komma oder Semikolon.</p>
+              <label class="file-label">Datei
+                <input type="file" name="file" accept=".csv,.txt,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+              </label>
+              <div class="actions">
+                <button type="submit">Importieren</button>
+                <button type="button" class="secondary" id="btn-template-csv">Vorlage CSV</button>
+                <button type="button" class="secondary" id="btn-template-xlsx">Vorlage Excel</button>
+              </div>
+              <div id="import-result"></div>
+            </form>
+          </div>
+        </div>
       </section>
 
       <section id="view-locations" class="panel app-panel hidden">
@@ -248,10 +304,8 @@
         <div id="bookings-msg" class="msg" role="status"></div>
         <div id="bookings-empty-hint" class="create-box hidden">
           <h3>Keine buchbaren Plätze</h3>
-          <p class="hint">Zuerst unter Standorte eine Hierarchie anlegen — oder als Admin den Beispiel-Standort erzeugen.</p>
-          <div class="actions">
-            <a class="button" href="/app/locations">Zu Standorten</a>
-          </div>
+          <p class="hint" id="bookings-empty-text"></p>
+          <div class="actions" id="bookings-empty-actions"></div>
         </div>
 
         <div class="create-box">
@@ -281,6 +335,32 @@
             <label>Stockwerk<select id="room-week-floor" disabled></select></label>
             <label>Raum<select id="room-week-select" disabled></select></label>
           </div>
+          <div id="booking-plan-box" class="booking-plan hidden">
+            <div class="week-toolbar booking-plan-head">
+              <h3>Lageplan <span id="booking-plan-caption" class="booking-plan-caption"></span></h3>
+              <div class="plan-mode-toggle" role="group" aria-label="Planansicht">
+                <button type="button" class="secondary" id="btn-booking-plan-floor" aria-pressed="true">Stockwerk</button>
+                <button type="button" class="secondary" id="btn-booking-plan-room" aria-pressed="false" disabled>Raum</button>
+              </div>
+            </div>
+            <div id="booking-plan-tools">
+              <div class="plan-zoom-bar">
+                <button type="button" class="secondary" id="btn-booking-plan-zoom-out" title="Verkleinern">−</button>
+                <button type="button" class="secondary" id="btn-booking-plan-zoom-reset" title="Einpassen">Einpassen</button>
+                <button type="button" class="secondary" id="btn-booking-plan-zoom-in" title="Vergrößern">+</button>
+              </div>
+              <div class="floor-plan-stage plan-stage booking-plan-stage" id="booking-plan-stage">
+                <canvas id="booking-plan-canvas" aria-label="Lageplan"></canvas>
+              </div>
+            </div>
+            <p class="hint legend-line" id="booking-plan-legend">
+              <span><span class="plan-swatch room"></span>Raum</span>
+              <span><span class="plan-swatch room-selected"></span>gewählter Raum</span>
+              <span><span class="plan-swatch place"></span>Platz</span>
+            </p>
+            <p class="hint" id="booking-plan-hint"></p>
+            <p class="hint hidden" id="booking-plan-empty"></p>
+          </div>
           <div class="week-grid-wrap">
             <table class="week-grid" id="room-week-grid">
               <thead></thead>
@@ -298,7 +378,11 @@
             <p class="lead" id="week-book-summary"></p>
             <input type="hidden" name="place_id" />
             <input type="hidden" name="date" />
-            <div class="day-timeline" id="week-book-timeline" aria-hidden="true"></div>
+            <div class="day-scale">
+              <div class="day-timeline" id="week-book-timeline" role="img" aria-label="Belegung zwischen 08:00 und 18:00"></div>
+              <div class="day-axis" id="week-book-axis" aria-hidden="true"></div>
+              <p class="hint day-busy-caption" id="week-book-busy"></p>
+            </div>
             <div id="week-book-free-slots" class="slot-chips"></div>
             <fieldset class="equip-fieldset">
               <legend>Buchungsumfang</legend>
@@ -306,8 +390,20 @@
               <label class="check-inline"><input type="radio" name="scope" value="partial" /> teilweise</label>
             </fieldset>
             <div id="week-book-partial-fields" class="row-2 hidden">
-              <label>Von<input name="start_time" type="time" value="09:00" /></label>
-              <label>Bis<input name="end_time" type="time" value="12:00" /></label>
+              <label>Von
+                <span class="clock-24">
+                  <select name="start_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde von"></select>
+                  <span aria-hidden="true">:</span>
+                  <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+                </span>
+              </label>
+              <label>Bis
+                <span class="clock-24">
+                  <select name="end_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde bis"></select>
+                  <span aria-hidden="true">:</span>
+                  <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+                </span>
+              </label>
             </div>
             <div class="actions">
               <button type="submit">Buchen</button>
@@ -319,8 +415,22 @@
         <form id="form-booking-search" class="create-box">
           <h3>Verfügbarkeit / Buchen</h3>
           <div class="row-2">
-            <label>Von<input name="starts_at" type="datetime-local" required /></label>
-            <label>Bis<input name="ends_at" type="datetime-local" required /></label>
+            <label>Von
+              <span class="clock-24">
+                <input name="start_date" type="date" lang="de-DE" required />
+                <select name="start_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde von"></select>
+                <span aria-hidden="true">:</span>
+                <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+              </span>
+            </label>
+            <label>Bis
+              <span class="clock-24">
+                <input name="end_date" type="date" lang="de-DE" required />
+                <select name="end_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde bis"></select>
+                <span aria-hidden="true">:</span>
+                <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+              </span>
+            </label>
           </div>
           <div class="row-2">
             <label>Standort<select name="location_id"><option value="">alle</option></select></label>

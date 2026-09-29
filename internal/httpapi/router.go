@@ -31,7 +31,9 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("GET /login", spa)
 	mux.HandleFunc("GET /register", spa)
 	mux.HandleFunc("GET /verify", spa)
+	mux.HandleFunc("GET /invite", spa)
 	mux.HandleFunc("GET /app", spa)
+	mux.HandleFunc("GET /app/users", spa)
 	mux.HandleFunc("GET /app/locations", spa)
 	mux.HandleFunc("GET /app/place-types", spa)
 	mux.HandleFunc("GET /app/equipments", spa)
@@ -66,10 +68,19 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("POST /api/v1/auth/verify", authH.Verify)
 	mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	mux.HandleFunc("POST /api/v1/auth/logout", authH.Logout)
+	mux.HandleFunc("POST /api/v1/auth/accept-invite", authH.AcceptInvite)
 	mux.HandleFunc("GET /api/v1/auth/me", RequireAuth(authSvc, authH.Me))
 
 	tenant := withAuth(authSvc, RequireTenant)
 	admin := withAuth(authSvc, RequireTenantAdmin)
+
+	memberH := MemberHandlers{Service: authSvc}
+	mux.HandleFunc("GET /api/v1/users", admin(memberH.List))
+	mux.HandleFunc("POST /api/v1/users", admin(memberH.Create))
+	mux.HandleFunc("POST /api/v1/users/import", admin(memberH.Import))
+	mux.HandleFunc("GET /api/v1/users/import-template", admin(memberH.Template))
+	mux.HandleFunc("POST /api/v1/users/{id}/invite", admin(memberH.ResendInvite))
+	mux.HandleFunc("PATCH /api/v1/users/{id}", admin(memberH.SetDisabled))
 
 	mux.HandleFunc("GET /api/v1/locations", tenant(catH.ListLocations))
 	mux.HandleFunc("POST /api/v1/locations", admin(catH.CreateLocation))

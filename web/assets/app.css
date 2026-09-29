@@ -413,6 +413,24 @@ select {
   color: var(--ink);
 }
 
+.clock-24 {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.clock-24 select {
+  width: 4.8rem;
+  flex: 0 0 auto;
+  padding-left: 0.55rem;
+  padding-right: 0.35rem;
+}
+
+.clock-24 input[type="date"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .side-stack {
   display: grid;
   gap: 1rem;
@@ -590,6 +608,23 @@ select {
   color: var(--ok);
 }
 
+.badge.warn {
+  background: rgba(154, 106, 20, 0.14);
+  color: #8a5a10;
+}
+
+.badge.muted {
+  background: rgba(20, 34, 31, 0.08);
+  color: var(--muted);
+}
+
+.import-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.85rem 0 0.35rem;
+}
+
 .week-toolbar {
   display: flex;
   justify-content: space-between;
@@ -725,13 +760,63 @@ select {
   vertical-align: middle;
 }
 
+.day-scale {
+  margin: 0.35rem 0 0.85rem;
+}
+
 .day-timeline {
   position: relative;
-  height: 1.4rem;
-  border-radius: 999px;
+  height: 1.55rem;
+  border-radius: 8px;
   background: rgba(31, 122, 77, 0.16);
   overflow: hidden;
-  margin: 0.35rem 0 0.75rem;
+  margin: 0;
+}
+
+.day-axis {
+  position: relative;
+  height: 1.45rem;
+  margin-top: 0.15rem;
+}
+
+.day-axis-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 0.22rem;
+  background: var(--line);
+  transform: translateX(-50%);
+}
+
+.day-axis-tick.hour {
+  height: 0.42rem;
+  background: var(--muted);
+}
+
+.day-axis-label {
+  position: absolute;
+  top: 0.48rem;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.day-axis-label.is-start {
+  transform: translateX(0);
+}
+
+.day-axis-label.is-end {
+  transform: translateX(-100%);
+}
+
+.day-busy-caption {
+  margin: 0.15rem 0 0;
+}
+
+.day-busy-caption:empty {
+  display: none;
 }
 
 .day-timeline .seg-busy,
@@ -929,6 +1014,64 @@ select {
 
 .plan-zoom-bar button {
   min-width: 2.4rem;
+}
+
+.booking-plan {
+  margin: 0.15rem 0 1.15rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+}
+
+.booking-plan-head {
+  margin-bottom: 0.45rem;
+}
+
+.booking-plan-caption {
+  font-family: Manrope, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.plan-mode-toggle {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.plan-mode-toggle button {
+  padding: 0.45rem 0.95rem;
+}
+
+.plan-mode-toggle button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #f7f3ea;
+  border-color: var(--accent);
+}
+
+.booking-plan-stage {
+  height: min(46vh, 480px);
+  min-height: 260px;
+}
+
+.plan-swatch {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  margin-right: 0.3rem;
+  vertical-align: -2px;
+  border: 2px solid #0f7a65;
+  background: rgba(15, 122, 77, 0.16);
+}
+
+.plan-swatch.room-selected {
+  border-color: #0b4f42;
+  background: rgba(15, 122, 101, 0.45);
+}
+
+.plan-swatch.place {
+  border-color: #a65d12;
+  background: rgba(196, 122, 46, 0.35);
 }
 
 .file-label input[type="file"] {
