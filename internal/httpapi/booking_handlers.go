@@ -269,6 +269,26 @@ func (h BookingHandlers) PlaceDay(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (h BookingHandlers) ResourceWeek(w http.ResponseWriter, r *http.Request) {
+	tenantID, _ := h.tenantUser(r)
+	groupID, err := uuid.Parse(r.URL.Query().Get("group_id"))
+	if err != nil {
+		writeError(w, auth.ErrInvalidInput("group_id must be a UUID"))
+		return
+	}
+	weekStart, err := booking.ParseWeekStart(r.URL.Query().Get("week_start"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	item, err := h.Service.ResourceWeek(r.Context(), tenantID, groupID, weekStart)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func (h BookingHandlers) RoomWeek(w http.ResponseWriter, r *http.Request) {
 	tenantID, _ := h.tenantUser(r)
 	roomID, err := uuid.Parse(r.URL.Query().Get("room_id"))

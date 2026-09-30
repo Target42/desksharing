@@ -2419,6 +2419,8 @@ async function renderResourcesPage() {
     fillNameSelect(createForm.location_id, locationItems, locationItems.length ? "" : "kein Standort", createForm.location_id.value);
     fillNameSelect(searchForm.group_id, groupItems, "alle", resourceGroupId);
     fillNameSelect(searchForm.location_id, locationItems, "alle", searchForm.location_id.value);
+    fillNameSelect(document.querySelector("#resource-week-group"), groupItems, "Gruppe wählen", resourceGroupId);
+    await loadResourceWeek();
   } catch (err) {
     groupList.innerHTML = "";
     resourceList.innerHTML = "";
@@ -2523,6 +2525,7 @@ async function runResourceSearch(form, keepMessage) {
                     await runResourceSearch(form, true);
                     loadMyBookings();
                     loadMyWeek();
+                    loadResourceWeek();
                   } catch (err) {
                     setMsg(msg, "error", err.message || "Buchung fehlgeschlagen.");
                   }
@@ -2684,6 +2687,8 @@ function formatWeekLabel(startISO, endISO) {
 }
 
 let myWeekStart = formatISODate(mondayOf());
+let resourceWeekStart = formatISODate(mondayOf());
+let resourceWeekData = null;
 let roomWeekStart = formatISODate(mondayOf());
 
 let bookingPlanState = null;
@@ -3747,6 +3752,198 @@ document.querySelector("#btn-room-week-prev")?.addEventListener("click", async (
 document.querySelector("#btn-room-week-next")?.addEventListener("click", async () => {
   roomWeekStart = formatISODate(addDays(roomWeekStart, 7));
   await loadRoomWeek();
+});
+document.querySelector("#btn-resource-week-prev")?.addEventListener("click", async () => {
+  resourceWeekStart = formatISODate(addDays(resourceWeekStart, -7));
+  await loadResourceWeek();
+});
+document.querySelector("#btn-resource-week-next")?.addEventListener("click", async () => {
+  resourceWeekStart = formatISODate(addDays(resourceWeekStart, 7));
+  await loadResourceWeek();
+});
+document.querySelector("#resource-week-group")?.addEventListener("change", () => {
+  resourceGroupId = document.querySelector("#resource-week-group").value;
+  renderResourcesPage();
+});
+
+function resourceBookingChip(booking) {
+  const who = booking.user_name || "gebucht";
+  let when = "ganzer Tag";
+  if (booking.mode !== "daily") {
+    const clock = (iso) =>
+      new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    when = `${clock(booking.starts_at)}–${clock(booking.ends_at)}`;
+  }
+  return `<span class="booking-chip" title="${escapeHtml(bookingStatusLabel(booking.status))}">${escapeHtml(when)} · ${escapeHtml(who)}</span>`;
+}
+
+async function loadResourceWeek() {
+  const groupSel = document.querySelector("#resource-week-group");
+  const label = document.querySelector("#resource-week-label");
+  const table = document.querySelector("#resource-week-grid");
+  if (!table || !label) return;
+  const thead = table.querySelector("thead");
+  const tbody = table.querySelector("tbody");
+  if (!groupSel?.value) {
+    label.textContent = formatWeekLabel(resourceWeekStart, formatISODate(addDays(resourceWeekStart, 6)));
+    thead.innerHTML = "";
+    tbody.innerHTML = `<tr><td class="hint">Bitte eine Gruppe wählen.</td></tr>`;
+    return;
+  }
+  document.querySelector("#form-resource-week-book")?.classList.add("hidden");
+  tbody.innerHTML = `<tr><td class="hint">Lade…</td></tr>`;
+  try {
+    const data = await api(
+      `/api/v1/bookings/resource-week?group_id=${encodeURIComponent(groupSel.value)}&week_start=${resourceWeekStart}`,
+      { auth: true }
+    );
+    resourceWeekData = data;
+    resourceWeekStart = data.week_start;
+    label.textContent = formatWeekLabel(data.week_start, data.week_end);
+    const weekday = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+    thead.innerHTML = `<tr><th class="place-col">Ressource</th>${data.days
+      .map((d, i) => {
+        const dt = new Date(d + "T12:00:00");
+        return `<th>${weekday[i]}<br>${dt.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" })}</th>`;
+      })
+      .join("")}</tr>`;
+    if (!data.resources.length) {
+      tbody.innerHTML = `<tr><td colspan="8" class="hint">Keine Ressourcen in dieser Gruppe.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.resources
+      .map((resource) => {
+        const meta = [resource.location_name, resource.seats ? `${resource.seats} Sitze` : ""].filter(Boolean).join(" · ");
+        const cells = resource.days
+          .map((day) => {
+            const bookings = day.bookings || [];
+            const full = bookings.some((b) => b.mode === "daily");
+            const bookable = !full && day.date >= todayISODate();
+            const cls = full ? "cell-full" : bookings.length ? "cell-partial" : "cell-free";
+            const body = bookings.length ? bookings.map(resourceBookingChip).join("") : "frei";
+            return `<td class="${cls}${bookable ? " cell-bookable" : ""}" data-resource-id="${resource.id}" data-date="${day.date}">${body}</td>`;
+          })
+          .join("");
+        return `<tr><td class="place-col">${escapeHtml(resource.name)}${meta ? `<div class="hint">${escapeHtml(meta)}</div>` : ""}</td>${cells}</tr>`;
+      })
+      .join("");
+    tbody.querySelectorAll("td.cell-bookable").forEach((td) => {
+      td.addEventListener("click", () => {
+        const resource = (resourceWeekData?.resources || []).find((item) => item.id === td.dataset.resourceId);
+        const day = resource?.days?.find((item) => item.date === td.dataset.date);
+        if (resource && day) openResourceWeekBook(resource, day);
+      });
+    });
+  } catch (err) {
+    tbody.innerHTML = "";
+    setMsg(document.querySelector("#resources-msg"), "error", err.message || "Wochenübersicht laden fehlgeschlagen.");
+  }
+}
+
+function resourceWeekSlot(dateISO) {
+  if (dateISO > todayISODate()) return { start: "09:00", end: "12:00" };
+  const start = new Date();
+  start.setSeconds(0, 0);
+  const remainder = start.getMinutes() % 15;
+  if (remainder !== 0) start.setMinutes(start.getMinutes() + (15 - remainder));
+  if (start.getTime() <= Date.now()) start.setMinutes(start.getMinutes() + 15);
+  if (isoDateLocal(start) !== dateISO) return null;
+  let end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+  if (isoDateLocal(end) !== dateISO) end = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 23, 45, 0, 0);
+  if (end <= start) return null;
+  return { start: hhmmLocal(start), end: hhmmLocal(end) };
+}
+
+function syncResourceWeekBookMode() {
+  const form = document.querySelector("#form-resource-week-book");
+  const daily = form.querySelector('input[name=mode]:checked')?.value === "daily";
+  document.querySelector("#resource-week-hourly").classList.toggle("hidden", daily);
+  document.querySelector("#resource-week-daily").classList.toggle("hidden", !daily);
+}
+
+function openResourceWeekBook(resource, day) {
+  const form = document.querySelector("#form-resource-week-book");
+  const nice = new Date(day.date + "T12:00:00").toLocaleDateString("de-DE", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  form.resource_id.value = resource.id;
+  form.dataset.date = day.date;
+  document.querySelector("#resource-week-book-summary").textContent = `${resource.name} · ${nice}`;
+  const busy = (day.bookings || []).map((booking) => {
+    const chip = resourceBookingChip(booking).replace(/<[^>]+>/g, "");
+    return chip;
+  });
+  document.querySelector("#resource-week-book-busy").textContent = busy.length ? `Schon gebucht: ${busy.join(", ")}` : "";
+  form.querySelector('input[name=mode][value=hourly]').checked = true;
+  ensureClockOptions();
+  const slot = resourceWeekSlot(day.date);
+  if (slot) {
+    setClock(form.start_hour, form.start_minute, slot.start);
+    setClock(form.end_hour, form.end_minute, slot.end);
+  } else {
+    const note = "Für heute bleibt keine Stundenbuchung mehr. Der ganze Tag ist noch buchbar.";
+    const line = document.querySelector("#resource-week-book-busy");
+    line.textContent = line.textContent ? `${line.textContent}. ${note}` : note;
+  }
+  form.start_date.value = day.date;
+  form.end_date.value = day.date;
+  syncResourceWeekBookMode();
+  form.classList.remove("hidden");
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+document.querySelectorAll("#form-resource-week-book input[name=mode]").forEach((input) => {
+  input.addEventListener("change", syncResourceWeekBookMode);
+});
+
+document.querySelector("#btn-resource-week-book-cancel")?.addEventListener("click", () => {
+  document.querySelector("#form-resource-week-book").classList.add("hidden");
+});
+
+document.querySelector("#form-resource-week-book")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const msg = document.querySelector("#resources-msg");
+  clearMsg(msg);
+  const mode = form.querySelector('input[name=mode]:checked')?.value || "hourly";
+  const body = { resource_id: form.resource_id.value, mode };
+  if (mode === "daily") {
+    if (!form.start_date.value || !form.end_date.value || form.end_date.value < form.start_date.value) {
+      setMsg(msg, "error", "Bitte Von- und Bis-Datum wählen.");
+      return;
+    }
+    body.start_date = form.start_date.value;
+    body.end_date = form.end_date.value;
+  } else {
+    const date = form.dataset.date;
+    const startTime = readClock(form.start_hour, form.start_minute);
+    const endTime = readClock(form.end_hour, form.end_minute);
+    const startMin = clockToMinutes(startTime);
+    const endMin = clockToMinutes(endTime);
+    if (!date || startMin == null || endMin == null || endMin <= startMin) {
+      setMsg(msg, "error", "Bitte gültigen Zeitraum wählen (Bis nach Von).");
+      return;
+    }
+    const startsAt = localStampToISO(date, startTime);
+    const endsAt = localStampToISO(date, endTime);
+    if (!endsAt || new Date(endsAt).getTime() <= Date.now()) {
+      setMsg(msg, "error", "Dieser Zeitraum liegt in der Vergangenheit.");
+      return;
+    }
+    body.starts_at = startsAt;
+    body.ends_at = endsAt;
+  }
+  try {
+    await api("/api/v1/bookings", { method: "POST", auth: true, body });
+    form.classList.add("hidden");
+    setMsg(msg, "ok", `${document.querySelector("#resource-week-book-summary").textContent} gebucht.`);
+    await Promise.all([loadResourceWeek(), loadMyBookings(), loadMyWeek()]);
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Buchung fehlgeschlagen.");
+  }
 });
 
 async function loadMyBookings() {
