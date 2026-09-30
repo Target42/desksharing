@@ -10,6 +10,7 @@ const views = {
   locations: document.querySelector("#view-locations"),
   placeTypes: document.querySelector("#view-place-types"),
   equipments: document.querySelector("#view-equipments"),
+  resources: document.querySelector("#view-resources"),
   bookings: document.querySelector("#view-bookings"),
 };
 
@@ -30,6 +31,7 @@ function navItems() {
       ["Standorte", "/app/locations"],
       ["Platztypen", "/app/place-types"],
       ["Ausstattung", "/app/equipments"],
+      ["Ressourcen", "/app/resources"],
       ["Buchungen", "/app/bookings"],
     ];
   }
@@ -37,6 +39,7 @@ function navItems() {
     return [
       ["Konto", "/app"],
       ["Buchungen", "/app/bookings"],
+      ["Ressourcen", "/app/resources"],
     ];
   }
   return [["Konto", "/app"]];
@@ -95,6 +98,56 @@ function landingPath() {
   return currentUser && currentUser.role === "employee" ? "/app/bookings" : "/app";
 }
 
+const LOGIN_SLUG_KEY = "desksharing_login_slug";
+
+function tenantEntrySlug(path) {
+  const match = String(path || "").match(/^\/([a-z0-9]+(?:-[a-z0-9]+)*)$/);
+  if (!match) return "";
+  const reserved = new Set(["login", "register", "verify", "invite", "app", "api", "assets", "healthz"]);
+  return reserved.has(match[1]) ? "" : match[1];
+}
+
+function rememberLoginSlug(slug) {
+  if (slug) sessionStorage.setItem(LOGIN_SLUG_KEY, slug);
+  else sessionStorage.removeItem(LOGIN_SLUG_KEY);
+}
+
+function loginEntryPath() {
+  const slug = sessionStorage.getItem(LOGIN_SLUG_KEY) || "";
+  return slug ? `/${slug}` : "/login";
+}
+
+function prepareLoginForm(slug) {
+  const field = document.querySelector("#login-slug-field");
+  const input = document.querySelector("#form-login [name=tenant_slug]");
+  const lead = document.querySelector("#login-lead");
+  if (!field || !input || !lead) return;
+  if (slug) {
+    field.classList.add("hidden");
+    input.value = slug;
+    lead.textContent = `Anmelden für ${slug}.`;
+  } else {
+    field.classList.remove("hidden");
+    input.value = "";
+    lead.textContent = "Anmelden und Arbeitsplätze verwalten.";
+  }
+}
+
+function showLogin(slug) {
+  prepareLoginForm(slug);
+  show("login");
+}
+
+async function showSignedInHome() {
+  history.replaceState({}, "", landingPath());
+  if (landingPath() === "/app/bookings") {
+    show("bookings");
+    await renderBookingsPage();
+    return;
+  }
+  await loadHome();
+}
+
 function isAdminPath(path) {
   return (
     path === "/app/users" ||
@@ -149,34 +202,30 @@ async function route() {
     if (getToken()) {
       try {
         await requireSession();
-        history.replaceState({}, "", landingPath());
-        if (landingPath() === "/app/bookings") {
-          show("bookings");
-          await renderBookingsPage();
-          return;
-        }
-        await loadHome();
+        await showSignedInHome();
         return;
       } catch {
         setToken("");
       }
     }
-    show("login");
+    showLogin("");
     return;
   }
 
   if (path.startsWith("/app")) {
     if (!getToken()) {
-      history.replaceState({}, "", "/login");
-      show("login");
+      const dest = loginEntryPath();
+      history.replaceState({}, "", dest);
+      showLogin(tenantEntrySlug(dest));
       return;
     }
     try {
       await requireSession();
     } catch {
       setToken("");
-      history.replaceState({}, "", "/login");
-      show("login");
+      const dest = loginEntryPath();
+      history.replaceState({}, "", dest);
+      showLogin(tenantEntrySlug(dest));
       return;
     }
 
@@ -212,6 +261,11 @@ async function route() {
       await renderEquipments();
       return;
     }
+    if (path === "/app/resources") {
+      show("resources");
+      await renderResourcesPage();
+      return;
+    }
     if (path === "/app/bookings") {
       show("bookings");
       await renderBookingsPage();
@@ -221,8 +275,26 @@ async function route() {
     return;
   }
 
+  const entry = tenantEntrySlug(path);
+  if (entry) {
+    rememberLoginSlug(entry);
+    if (getToken()) {
+      try {
+        await requireSession();
+        if ((currentUser.tenant_slug || "") === entry) {
+          await showSignedInHome();
+          return;
+        }
+      } catch {
+        setToken("");
+      }
+    }
+    showLogin(entry);
+    return;
+  }
+
   history.replaceState({}, "", "/login");
-  show("login");
+  showLogin("");
 }
 
 async function loadHome() {
@@ -251,6 +323,7 @@ async function runVerify(token) {
 }
 
 async function logout() {
+  const slug = (currentUser && currentUser.tenant_slug) || sessionStorage.getItem(LOGIN_SLUG_KEY) || "";
   try {
     await api("/api/v1/auth/logout", { method: "POST", auth: true });
   } catch {
@@ -258,8 +331,9 @@ async function logout() {
   }
   setToken("");
   currentUser = null;
-  history.pushState({}, "", "/login");
-  show("login");
+  const dest = slug ? `/${slug}` : "/login";
+  history.pushState({}, "", dest);
+  showLogin(slug);
 }
 
 document.querySelector("#form-login").addEventListener("submit", async (e) => {
@@ -275,11 +349,12 @@ document.querySelector("#form-login").addEventListener("submit", async (e) => {
       body: {
         email: fd.get("email"),
         password: fd.get("password"),
-        tenant_slug: fd.get("tenant_slug") || undefined,
+        tenant_slug: tenantEntrySlug(pathName()) || fd.get("tenant_slug") || undefined,
       },
     });
     setToken(out.token);
     currentUser = out.user;
+    rememberLoginSlug((out.user && out.user.tenant_slug) || "");
     history.pushState({}, "", landingPath());
     await route();
   } catch (err) {
@@ -307,7 +382,10 @@ document.querySelector("#form-register").addEventListener("submit", async (e) =>
         admin_display_name: fd.get("admin_display_name"),
       },
     });
-    const text = "Registrierung gestartet. Bitte E-Mail bestätigen.";
+    const slug = String(fd.get("tenant_slug") || "").trim().toLowerCase();
+    const text = slug
+      ? `Registrierung gestartet. Anmeldung danach unter /${slug}. Bitte E-Mail bestätigen.`
+      : "Registrierung gestartet. Bitte E-Mail bestätigen.";
     if (out.verification_token) {
       const link = `/verify?token=${encodeURIComponent(out.verification_token)}`;
       msg.className = "msg show ok";
@@ -731,6 +809,7 @@ function renderList(listEl, items, mapItem) {
   items.forEach((item) => {
     const cfg = mapItem(item);
     const li = document.createElement("li");
+    if (cfg.selected) li.classList.add("is-selected");
     const main = document.createElement("div");
     main.className = "item-main";
     main.innerHTML = cfg.subtitleHtml || cfg.subtitle
@@ -2158,6 +2237,312 @@ async function renderEquipments() {
   }
 }
 
+let resourceGroupId = "";
+
+function todayISODate() {
+  const d = new Date();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+function resourceSubtitle(item) {
+  const bits = [item.location_name || item.locationName].filter(Boolean);
+  if (item.seats) bits.push(`${item.seats} Sitze`);
+  if (item.description) bits.push(item.description);
+  if (item.group_name && !resourceGroupId) bits.unshift(item.group_name);
+  return bits.join(" · ");
+}
+
+function fillNameSelect(select, items, placeholder, selected) {
+  const current = selected != null ? selected : select.value;
+  select.innerHTML = placeholder ? `<option value="">${escapeHtml(placeholder)}</option>` : "";
+  items.forEach((item) => {
+    const opt = document.createElement("option");
+    opt.value = item.id;
+    opt.textContent = item.name;
+    select.appendChild(opt);
+  });
+  if ([...select.options].some((opt) => opt.value === current)) select.value = current;
+}
+
+function syncResourceModeFields() {
+  const form = document.querySelector("#form-resource-search");
+  const mode = form.querySelector('input[name=resource_mode]:checked')?.value || "hourly";
+  document.querySelector("#resource-hourly-fields").classList.toggle("hidden", mode !== "hourly");
+  document.querySelector("#resource-daily-fields").classList.toggle("hidden", mode !== "daily");
+}
+
+function resourceSearchWindow(form) {
+  const mode = form.querySelector('input[name=resource_mode]:checked')?.value || "hourly";
+  if (mode === "daily") {
+    const startDate = form.start_date.value;
+    const endDate = form.end_date.value;
+    if (!startDate || !endDate) return { error: "Bitte Von- und Bis-Datum wählen." };
+    if (endDate < startDate) return { error: "Enddatum liegt vor dem Startdatum." };
+    return { mode, startDate, endDate };
+  }
+  const date = form.date.value;
+  const startTime = readClock(form.start_hour, form.start_minute);
+  const endTime = readClock(form.end_hour, form.end_minute);
+  const startMin = clockToMinutes(startTime);
+  const endMin = clockToMinutes(endTime);
+  if (!date || startMin == null || endMin == null || endMin <= startMin) {
+    return { error: "Bitte gültigen Zeitraum wählen (Bis nach Von)." };
+  }
+  const startsAt = localStampToISO(date, startTime);
+  const endsAt = localStampToISO(date, endTime);
+  if (!endsAt || new Date(endsAt).getTime() <= Date.now()) {
+    return { error: "Dieser Zeitraum liegt in der Vergangenheit." };
+  }
+  return {
+    mode,
+    startsAt,
+    endsAt,
+    label: `${date} ${startTime}–${endTime}`,
+  };
+}
+
+function defaultResourceHourly() {
+  const start = new Date();
+  start.setSeconds(0, 0);
+  const remainder = start.getMinutes() % 15;
+  if (remainder !== 0) start.setMinutes(start.getMinutes() + (15 - remainder));
+  if (start.getTime() <= Date.now()) start.setMinutes(start.getMinutes() + 15);
+  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+  const sameDay = end.getFullYear() === start.getFullYear() && end.getMonth() === start.getMonth() && end.getDate() === start.getDate();
+  if (!sameDay || start.getHours() >= 22) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return { date: isoDateLocal(tomorrow), start: "09:00", end: "12:00" };
+  }
+  return { date: isoDateLocal(start), start: hhmmLocal(start), end: hhmmLocal(end) };
+}
+
+function isoDateLocal(d) {
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+function hhmmLocal(d) {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+async function renderResourcesPage() {
+  const msg = document.querySelector("#resources-msg");
+  const groupList = document.querySelector("#resource-groups-list");
+  const resourceList = document.querySelector("#resources-list");
+  clearMsg(msg);
+  applyAdminVisibility();
+  ensureClockOptions();
+  const searchForm = document.querySelector("#form-resource-search");
+  if (searchForm.start_date && !searchForm.start_date.value) searchForm.start_date.value = todayISODate();
+  if (searchForm.end_date && !searchForm.end_date.value) searchForm.end_date.value = todayISODate();
+  if (!searchForm.dataset.clockReady) {
+    const slot = defaultResourceHourly();
+    searchForm.date.value = slot.date;
+    setClock(searchForm.start_hour, searchForm.start_minute, slot.start);
+    setClock(searchForm.end_hour, searchForm.end_minute, slot.end);
+    searchForm.dataset.clockReady = "1";
+  }
+  syncResourceModeFields();
+  document.querySelector("#btn-resource-groups-all").classList.toggle("is-active", !resourceGroupId);
+
+  groupList.innerHTML = `<li class="empty">Lade…</li>`;
+  resourceList.innerHTML = `<li class="empty">Lade…</li>`;
+  try {
+    const [groups, resources, locations] = await Promise.all([
+      api("/api/v1/resource-groups", { auth: true }),
+      api("/api/v1/resources", { auth: true }),
+      api("/api/v1/locations", { auth: true }),
+    ]);
+    const groupItems = groups.items || [];
+    const resourceItems = resources.items || [];
+    const locationItems = locations.items || [];
+    if (resourceGroupId && !groupItems.some((g) => g.id === resourceGroupId)) resourceGroupId = "";
+
+    renderList(groupList, groupItems, (item) => ({
+      title: item.name,
+      selected: item.id === resourceGroupId,
+      onOpen: () => {
+        resourceGroupId = item.id;
+        renderResourcesPage();
+      },
+      actions: isAdmin()
+        ? [
+            {
+              label: "Löschen",
+              secondary: true,
+              run: async () => {
+                if (!confirm("Wirklich löschen?")) return;
+                try {
+                  await api(`/api/v1/resource-groups/${item.id}`, { method: "DELETE", auth: true });
+                  if (resourceGroupId === item.id) resourceGroupId = "";
+                  setMsg(msg, "ok", "Gruppe gelöscht.");
+                  await renderResourcesPage();
+                } catch (err) {
+                  setMsg(msg, "error", err.message || "Löschen fehlgeschlagen.");
+                }
+              },
+            },
+          ]
+        : null,
+    }));
+
+    const visible = resourceGroupId ? resourceItems.filter((item) => item.group_id === resourceGroupId) : resourceItems;
+    renderList(resourceList, visible, (item) => ({
+      title: item.name,
+      subtitle: resourceSubtitle(item),
+      actions: isAdmin()
+        ? [
+            {
+              label: "Löschen",
+              secondary: true,
+              run: async () => {
+                if (!confirm("Wirklich löschen?")) return;
+                try {
+                  await api(`/api/v1/resources/${item.id}`, { method: "DELETE", auth: true });
+                  setMsg(msg, "ok", "Ressource gelöscht.");
+                  await renderResourcesPage();
+                } catch (err) {
+                  setMsg(msg, "error", err.message || "Löschen fehlgeschlagen.");
+                }
+              },
+            },
+          ]
+        : null,
+    }));
+
+    const createForm = document.querySelector("#form-resource");
+    fillNameSelect(createForm.group_id, groupItems, "", resourceGroupId || createForm.group_id.value);
+    fillNameSelect(createForm.location_id, locationItems, locationItems.length ? "" : "kein Standort", createForm.location_id.value);
+    fillNameSelect(searchForm.group_id, groupItems, "alle", resourceGroupId);
+    fillNameSelect(searchForm.location_id, locationItems, "alle", searchForm.location_id.value);
+  } catch (err) {
+    groupList.innerHTML = "";
+    resourceList.innerHTML = "";
+    setMsg(msg, "error", err.message || "Laden fehlgeschlagen.");
+  }
+}
+
+document.querySelector("#btn-resource-groups-all").addEventListener("click", () => {
+  resourceGroupId = "";
+  renderResourcesPage();
+});
+
+document.querySelector("#form-resource-group").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#resources-msg");
+  clearMsg(msg);
+  const fd = new FormData(e.target);
+  try {
+    await api("/api/v1/resource-groups", { method: "POST", auth: true, body: { name: fd.get("name") } });
+    e.target.reset();
+    setMsg(msg, "ok", "Gruppe angelegt.");
+    await renderResourcesPage();
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Anlegen fehlgeschlagen.");
+  }
+});
+
+document.querySelector("#form-resource").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#resources-msg");
+  clearMsg(msg);
+  const fd = new FormData(e.target);
+  const seatsRaw = String(fd.get("seats") || "").trim();
+  const body = {
+    group_id: fd.get("group_id"),
+    location_id: fd.get("location_id"),
+    name: fd.get("name"),
+    description: fd.get("description") || "",
+  };
+  if (seatsRaw) body.seats = Number(seatsRaw);
+  try {
+    await api("/api/v1/resources", { method: "POST", auth: true, body });
+    e.target.name.value = "";
+    e.target.description.value = "";
+    e.target.seats.value = "";
+    setMsg(msg, "ok", "Ressource angelegt.");
+    await renderResourcesPage();
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Anlegen fehlgeschlagen.");
+  }
+});
+
+document.querySelectorAll("#form-resource-search input[name=resource_mode]").forEach((input) => {
+  input.addEventListener("change", syncResourceModeFields);
+});
+
+async function runResourceSearch(form, keepMessage) {
+  const msg = document.querySelector("#resources-msg");
+  const list = document.querySelector("#resource-search-list");
+  if (!keepMessage) clearMsg(msg);
+  const windowSpec = resourceSearchWindow(form);
+  if (windowSpec.error) {
+    setMsg(msg, "error", windowSpec.error);
+    return;
+  }
+  const params = new URLSearchParams({ mode: windowSpec.mode });
+  if (windowSpec.mode === "daily") {
+    params.set("start_date", windowSpec.startDate);
+    params.set("end_date", windowSpec.endDate);
+  } else {
+    params.set("starts_at", windowSpec.startsAt);
+    params.set("ends_at", windowSpec.endsAt);
+  }
+  if (form.group_id.value) params.set("group_id", form.group_id.value);
+  if (form.location_id.value) params.set("location_id", form.location_id.value);
+  if (form.only_available.checked) params.set("only_available", "1");
+  list.innerHTML = `<li class="empty">Suche…</li>`;
+  try {
+    const data = await api(`/api/v1/bookings/resources?${params}`, { auth: true });
+    renderList(list, data.items, (item) => {
+      const seats = item.seats ? `${item.seats} Sitze` : "";
+      const where = [item.group_name, item.location_name, seats, item.description].filter(Boolean).join(" · ");
+      return {
+        title: item.name,
+        subtitleHtml: `${item.available ? '<span class="badge free">frei</span>' : '<span class="badge busy">belegt</span>'} ${escapeHtml(where)}`,
+        actions: item.available
+          ? [
+              {
+                label: "Buchen",
+                run: async () => {
+                  const body = { resource_id: item.id, mode: windowSpec.mode };
+                  if (windowSpec.mode === "daily") {
+                    body.start_date = windowSpec.startDate;
+                    body.end_date = windowSpec.endDate;
+                  } else {
+                    body.starts_at = windowSpec.startsAt;
+                    body.ends_at = windowSpec.endsAt;
+                  }
+                  try {
+                    await api("/api/v1/bookings", { method: "POST", auth: true, body });
+                    setMsg(msg, "ok", `${item.name} gebucht.`);
+                    await runResourceSearch(form, true);
+                    loadMyBookings();
+                    loadMyWeek();
+                  } catch (err) {
+                    setMsg(msg, "error", err.message || "Buchung fehlgeschlagen.");
+                  }
+                },
+              },
+            ]
+          : null,
+      };
+    });
+  } catch (err) {
+    list.innerHTML = "";
+    setMsg(msg, "error", err.message || "Suche fehlgeschlagen.");
+  }
+}
+
+document.querySelector("#form-resource-search").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  await runResourceSearch(e.target, false);
+});
+
 document.querySelector("#form-equipment").addEventListener("submit", async (e) => {
   e.preventDefault();
   const msg = document.querySelector("#equipments-msg");
@@ -2245,6 +2630,18 @@ function localStampToISO(date, hhmm) {
   const parsed = new Date(`${date}T${hour}:${minute}:00`);
   if (Number.isNaN(parsed.getTime())) return "";
   return parsed.toISOString();
+}
+
+function bookingRangeLabel(item) {
+  if (item.booking_mode === "daily") {
+    const start = new Date(item.starts_at);
+    const endInclusive = new Date(new Date(item.ends_at).getTime() - 1);
+    const fmt = (d) => d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const from = fmt(start);
+    const to = fmt(endInclusive);
+    return from === to ? from : `${from} – ${to}`;
+  }
+  return `${formatDateTimeDE(item.starts_at)} – ${formatDateTimeDE(item.ends_at)}`;
 }
 
 function formatDateTimeDE(iso) {
@@ -3407,7 +3804,7 @@ async function loadMyBookings() {
       }
       return {
         title: item.place_label || "Buchung",
-        subtitle: `${bookingStatusLabel(item.status)} · ${formatDateTimeDE(item.starts_at)} – ${formatDateTimeDE(item.ends_at)}`,
+        subtitle: `${bookingStatusLabel(item.status)} · ${bookingRangeLabel(item)}`,
         actions,
       };
     });

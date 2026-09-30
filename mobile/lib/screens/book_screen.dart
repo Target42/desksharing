@@ -502,26 +502,56 @@ class _PlaceCard extends StatelessWidget {
                 ),
               ),
             const SizedBox(height: 10),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final day in place.days)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: _DayChip(
-                        day: day,
-                        onTap: dayIsBookable(day.status)
-                            ? () => onDay(day)
-                            : null,
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            _DayGrid(days: place.days, onDay: onDay),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _DayGrid extends StatelessWidget {
+  const _DayGrid({required this.days, required this.onDay});
+
+  final List<PlaceDay> days;
+  final ValueChanged<PlaceDay> onDay;
+
+  @override
+  Widget build(BuildContext context) {
+    const columns = 4;
+    final rows = <List<PlaceDay?>>[];
+    for (var i = 0; i < days.length; i += columns) {
+      final slice = days.skip(i).take(columns).toList();
+      rows.add([
+        for (final day in slice) day,
+        for (var pad = slice.length; pad < columns; pad++) null,
+      ]);
+    }
+    return Column(
+      children: [
+        for (var row = 0; row < rows.length; row++)
+          Padding(
+            padding: EdgeInsets.only(top: row == 0 ? 0 : 8),
+            child: Row(
+              children: [
+                for (var column = 0; column < columns; column++)
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.only(left: column == 0 ? 0 : 6),
+                      child: rows[row][column] == null
+                          ? const SizedBox.shrink()
+                          : _DayChip(
+                              day: rows[row][column]!,
+                              onTap: dayIsBookable(rows[row][column]!.status)
+                                  ? () => onDay(rows[row][column]!)
+                                  : null,
+                            ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }
@@ -550,32 +580,36 @@ class _DayChip extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
-          child: SizedBox(
-            width: 76,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(6, 8, 6, 8),
-              child: Column(
-                children: [
-                  Text(
-                    weekday,
-                    style: TextStyle(
-                      color: tone.foreground,
-                      fontWeight: FontWeight.w700,
-                    ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  weekday,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: tone.foreground,
+                    fontWeight: FontWeight.w700,
                   ),
-                  Text(
-                    dayMonth,
-                    style: TextStyle(color: tone.foreground, fontSize: 12),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
+                ),
+                Text(
+                  dayMonth,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: tone.foreground, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
                     dayStatusLabel(day.status),
+                    maxLines: 1,
                     style: TextStyle(color: tone.foreground, fontSize: 11),
                   ),
-                  const SizedBox(height: 6),
-                  _OccupancyBar(day: day),
-                ],
-              ),
+                ),
+                const SizedBox(height: 6),
+                _OccupancyBar(day: day),
+              ],
             ),
           ),
         ),

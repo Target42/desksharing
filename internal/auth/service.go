@@ -50,22 +50,23 @@ func NewService(pool *pgxpool.Pool, mailer Mailer, publicBaseURL string, session
 }
 
 type User struct {
-	ID                uuid.UUID  `json:"id"`
-	TenantID          *uuid.UUID `json:"tenant_id,omitempty"`
-	Email             string     `json:"email"`
-	DisplayName       string     `json:"display_name"`
-	Role              string     `json:"role"`
-	IdentityProvider  string     `json:"identity_provider"`
-	CanBlock          bool       `json:"can_block"`
-	EmailVerifiedAt   *time.Time `json:"email_verified_at,omitempty"`
+	ID               uuid.UUID  `json:"id"`
+	TenantID         *uuid.UUID `json:"tenant_id,omitempty"`
+	Email            string     `json:"email"`
+	DisplayName      string     `json:"display_name"`
+	Role             string     `json:"role"`
+	IdentityProvider string     `json:"identity_provider"`
+	CanBlock         bool       `json:"can_block"`
+	EmailVerifiedAt  *time.Time `json:"email_verified_at,omitempty"`
+	TenantSlug       string     `json:"tenant_slug,omitempty"`
 }
 
 type RegisterTenantInput struct {
-	TenantName        string `json:"tenant_name"`
-	TenantSlug        string `json:"tenant_slug"`
-	AdminEmail        string `json:"admin_email"`
-	AdminPassword     string `json:"admin_password"`
-	AdminDisplayName  string `json:"admin_display_name"`
+	TenantName       string `json:"tenant_name"`
+	TenantSlug       string `json:"tenant_slug"`
+	AdminEmail       string `json:"admin_email"`
+	AdminPassword    string `json:"admin_password"`
+	AdminDisplayName string `json:"admin_display_name"`
 }
 
 type RegisterTenantResult struct {
@@ -93,6 +94,9 @@ func (s *Service) RegisterTenant(ctx context.Context, in RegisterTenantInput) (*
 
 	if in.TenantName == "" || in.TenantSlug == "" {
 		return nil, ErrInvalidInput("tenant_name and tenant_slug are required")
+	}
+	if !ValidTenantSlug(in.TenantSlug) {
+		return nil, ErrInvalidInput("Ungültiger oder reservierter Slug")
 	}
 	if in.AdminEmail == "" || len(in.AdminPassword) < 8 {
 		return nil, ErrInvalidInput("admin_email and admin_password (min 8 chars) are required")
@@ -310,9 +314,10 @@ func (s *Service) Authenticate(ctx context.Context, rawToken string) (*User, err
 	var verifiedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.tenant_id, u.email, u.display_name, u.role::text, u.identity_provider::text,
-		       u.can_block, u.email_verified_at
+		       u.can_block, u.email_verified_at, COALESCE(tn.slug, '')
 		FROM auth_tokens t
 		JOIN users u ON u.id = t.user_id
+		LEFT JOIN tenants tn ON tn.id = u.tenant_id
 		WHERE t.token_hash = $1
 		  AND t.purpose = $2
 		  AND t.used_at IS NULL
@@ -320,7 +325,7 @@ func (s *Service) Authenticate(ctx context.Context, rawToken string) (*User, err
 		  AND u.disabled_at IS NULL
 	`, HashToken(rawToken), PurposeSession).Scan(
 		&user.ID, &tenantID, &user.Email, &user.DisplayName, &user.Role, &user.IdentityProvider,
-		&user.CanBlock, &verifiedAt,
+		&user.CanBlock, &verifiedAt, &user.TenantSlug,
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -383,7 +388,7 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 		var verifiedAt *time.Time
 		err := s.pool.QueryRow(ctx, `
 			SELECT u.id, u.tenant_id, u.email, u.display_name, u.role::text, u.identity_provider::text,
-			       u.can_block, u.email_verified_at, u.password_hash
+			       u.can_block, u.email_verified_at, t.slug, u.password_hash
 			FROM users u
 			JOIN tenants t ON t.id = u.tenant_id
 			WHERE lower(u.email) = lower($1)
@@ -391,7 +396,7 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 			  AND u.disabled_at IS NULL
 		`, email, tenantSlug).Scan(
 			&user.ID, &tenantID, &user.Email, &user.DisplayName, &user.Role, &user.IdentityProvider,
-			&user.CanBlock, &verifiedAt, &hash,
+			&user.CanBlock, &verifiedAt, &user.TenantSlug, &hash,
 		)
 		if err != nil {
 			if err == pgx.ErrNoRows {
@@ -406,8 +411,9 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.id, u.tenant_id, u.email, u.display_name, u.role::text, u.identity_provider::text,
-		       u.can_block, u.email_verified_at, u.password_hash
+		       u.can_block, u.email_verified_at, COALESCE(t.slug, ''), u.password_hash
 		FROM users u
+		LEFT JOIN tenants t ON t.id = u.tenant_id
 		WHERE lower(u.email) = lower($1)
 		  AND u.disabled_at IS NULL
 	`, email)
@@ -428,7 +434,7 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 		var hash *string
 		if err := rows.Scan(
 			&user.ID, &tenantID, &user.Email, &user.DisplayName, &user.Role, &user.IdentityProvider,
-			&user.CanBlock, &verifiedAt, &hash,
+			&user.CanBlock, &verifiedAt, &user.TenantSlug, &hash,
 		); err != nil {
 			return nil, "", fmt.Errorf("scan user: %w", err)
 		}

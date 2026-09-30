@@ -294,6 +294,60 @@ class PlaceDayDetail {
   }
 }
 
+class ResourceGroup {
+  const ResourceGroup({required this.id, required this.name});
+
+  final String id;
+  final String name;
+
+  factory ResourceGroup.fromJson(Map<String, dynamic> json) {
+    return ResourceGroup(id: jstr(json['id']), name: jstr(json['name']));
+  }
+}
+
+class BookableResource {
+  const BookableResource({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.seats,
+    required this.groupName,
+    required this.locationName,
+    required this.available,
+  });
+
+  final String id;
+  final String name;
+  final String description;
+  final int? seats;
+  final String groupName;
+  final String locationName;
+  final bool available;
+
+  String get subtitle {
+    final bits = <String>[
+      if (groupName.isNotEmpty) groupName,
+      if (locationName.isNotEmpty) locationName,
+      if (seats != null && seats! > 0) '$seats Sitze',
+      if (description.isNotEmpty) description,
+    ];
+    return bits.join(' · ');
+  }
+
+  factory BookableResource.fromJson(Map<String, dynamic> json) {
+    final rawSeats = json['seats'];
+    return BookableResource(
+      id: jstr(json['id']),
+      name: jstr(json['name']),
+      description: jstr(json['description']),
+      seats: rawSeats == null ? null : jint(rawSeats),
+      groupName: jstr(json['group_name']),
+      locationName: jstr(json['location_name']),
+      available: jbool(json['available']),
+    );
+  }
+}
+
 class BookingItem {
   const BookingItem({
     required this.id,

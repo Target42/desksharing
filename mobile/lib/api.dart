@@ -125,6 +125,61 @@ class DesksharingApi {
     return PlaceDayDetail.fromJson(json);
   }
 
+  Future<List<ResourceGroup>> resourceGroups() async {
+    final json = await _send('GET', '/api/v1/resource-groups');
+    return jlist(json['items'], ResourceGroup.fromJson);
+  }
+
+  Future<List<BookableResource>> searchResources({
+    required String mode,
+    String? groupId,
+    String? locationId,
+    String startsAt = '',
+    String endsAt = '',
+    String startDate = '',
+    String endDate = '',
+    bool onlyAvailable = true,
+  }) async {
+    final json = await _send(
+      'GET',
+      '/api/v1/bookings/resources',
+      query: {
+        'mode': mode,
+        if (groupId != null && groupId.isNotEmpty) 'group_id': groupId,
+        if (locationId != null && locationId.isNotEmpty)
+          'location_id': locationId,
+        if (mode == 'hourly') 'starts_at': startsAt,
+        if (mode == 'hourly') 'ends_at': endsAt,
+        if (mode == 'daily') 'start_date': startDate,
+        if (mode == 'daily') 'end_date': endDate,
+        if (onlyAvailable) 'only_available': '1',
+      },
+    );
+    return jlist(json['items'], BookableResource.fromJson);
+  }
+
+  Future<void> createResourceBooking({
+    required String resourceId,
+    required String mode,
+    String startsAt = '',
+    String endsAt = '',
+    String startDate = '',
+    String endDate = '',
+  }) async {
+    await _send(
+      'POST',
+      '/api/v1/bookings',
+      body: {
+        'resource_id': resourceId,
+        'mode': mode,
+        if (mode == 'hourly') 'starts_at': startsAt,
+        if (mode == 'hourly') 'ends_at': endsAt,
+        if (mode == 'daily') 'start_date': startDate,
+        if (mode == 'daily') 'end_date': endDate,
+      },
+    );
+  }
+
   Future<void> createBooking({
     required String placeId,
     required String startsAt,

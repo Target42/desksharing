@@ -91,6 +91,21 @@ a:hover {
   color: var(--ink);
 }
 
+.brand.with-mark {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.brand.with-mark::before {
+  content: "";
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 8px;
+  background: url("/assets/logo.png") center / cover no-repeat;
+  flex: none;
+}
+
 .lead {
   margin: 0 0 1.5rem;
   color: var(--muted);
@@ -190,6 +205,18 @@ button.secondary,
   background: transparent;
   color: var(--ink);
   border: 1px solid var(--line);
+}
+
+button.secondary.is-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+@media (min-width: 860px) {
+  #resource-hourly-fields.row-2 {
+    grid-template-columns: 1.2fr 1fr 1fr;
+  }
 }
 
 button:disabled {
@@ -351,6 +378,11 @@ button:disabled {
   padding: 0;
   display: grid;
   gap: 0.55rem;
+}
+
+.list li.is-selected {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .list li {

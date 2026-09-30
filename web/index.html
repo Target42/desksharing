@@ -10,6 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
+    <link rel="icon" href="/assets/logo.png" type="image/png" />
     <link rel="stylesheet" href="/assets/app.css" />
     <link
       rel="stylesheet"
@@ -26,14 +27,14 @@
   <body>
     <main class="shell">
       <section id="view-login" class="panel hidden">
-        <h1 class="brand">Desksharing</h1>
-        <p class="lead">Anmelden und Arbeitsplätze verwalten.</p>
+        <h1 class="brand with-mark">Desksharing</h1>
+        <p class="lead" id="login-lead">Anmelden und Arbeitsplätze verwalten.</p>
         <div id="login-msg" class="msg" role="status"></div>
         <form id="form-login">
           <label>E-Mail<input name="email" type="email" autocomplete="username" required /></label>
           <label>Passwort<input name="password" type="password" autocomplete="current-password" required /></label>
-          <label>
-            Mandanten-Slug <span class="hint">(nur wenn E-Mail mehrfach existiert)</span>
+          <label id="login-slug-field">
+            Mandanten-Slug <span class="hint">(nur wenn dieselbe E-Mail in mehreren Firmen existiert — sonst /firma-slug öffnen)</span>
             <input name="tenant_slug" type="text" autocomplete="organization" placeholder="acme" />
           </label>
           <div class="actions">
@@ -44,13 +45,16 @@
       </section>
 
       <section id="view-register" class="panel wide hidden">
-        <h1 class="brand">Desksharing</h1>
+        <h1 class="brand with-mark">Desksharing</h1>
         <p class="lead">Neuen Mandanten anlegen — danach E-Mail bestätigen.</p>
         <div id="register-msg" class="msg" role="status"></div>
         <form id="form-register">
           <div class="row-2">
             <label>Firmenname<input name="tenant_name" required placeholder="Acme GmbH" /></label>
-            <label>Slug<input name="tenant_slug" required placeholder="acme" pattern="[a-z0-9\-]+" /></label>
+            <label>Slug
+              <input name="tenant_slug" required placeholder="acme" pattern="[a-z0-9\-]+" />
+              <span class="hint">Anmeldeadresse, z. B. /acme. Danach nicht mehr in der URL.</span>
+            </label>
           </div>
           <div class="row-2">
             <label>Admin-Name<input name="admin_display_name" required placeholder="Alex Admin" /></label>
@@ -65,7 +69,7 @@
       </section>
 
       <section id="view-invite" class="panel hidden">
-        <h1 class="brand">Desksharing</h1>
+        <h1 class="brand with-mark">Desksharing</h1>
         <p class="lead">Lege ein Passwort fest, um die Einladung anzunehmen.</p>
         <div id="invite-msg" class="msg" role="status"></div>
         <form id="form-invite">
@@ -80,7 +84,7 @@
       </section>
 
       <section id="view-verify" class="panel hidden">
-        <h1 class="brand">Desksharing</h1>
+        <h1 class="brand with-mark">Desksharing</h1>
         <p class="lead">E-Mail-Adresse bzw. Mandantenregistrierung bestätigen.</p>
         <div id="verify-msg" class="msg" role="status"></div>
         <form id="form-verify">
@@ -95,7 +99,7 @@
       <section id="view-home" class="panel app-panel hidden">
         <div class="app-header">
           <div>
-            <h1 class="brand">Desksharing</h1>
+            <h1 class="brand with-mark">Desksharing</h1>
             <p class="lead" id="home-lead">Angemeldet als <strong id="home-name"></strong><span id="home-lead-extra"></span></p>
           </div>
           <nav class="app-nav" data-app-nav="Konto"></nav>
@@ -108,6 +112,7 @@
         </ul>
         <div class="actions employee-only hidden" id="home-employee-actions">
           <a class="button" href="/app/bookings">Arbeitsplatz buchen</a>
+          <a class="button secondary" href="/app/resources">Ressource buchen</a>
         </div>
       </section>
 
@@ -291,6 +296,82 @@
             <div class="actions"><button type="submit">Anlegen</button></div>
           </form>
         </div>
+      </section>
+
+      <section id="view-resources" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Ressourcen</h1>
+            <p class="lead">Eigenständig buchbar, stundenweise oder für einen bis mehrere Tage. Zum Beispiel IT-Ausrüstung oder Fahrzeuge.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Ressourcen"></nav>
+        </div>
+        <div id="resources-msg" class="msg" role="status"></div>
+        <div class="split">
+          <div>
+            <div class="section-head"><h2>Gruppen</h2></div>
+            <div class="actions">
+              <button type="button" class="secondary" id="btn-resource-groups-all">Alle</button>
+            </div>
+            <ul class="list" id="resource-groups-list"></ul>
+            <form id="form-resource-group" class="create-box admin-only hidden">
+              <h3>Neue Gruppe</h3>
+              <label>Name<input name="name" required placeholder="IT-Ausrüstung" /></label>
+              <div class="actions"><button type="submit">Anlegen</button></div>
+            </form>
+          </div>
+          <div>
+            <div class="section-head"><h2>Ressourcen</h2></div>
+            <ul class="list" id="resources-list"></ul>
+            <form id="form-resource" class="create-box admin-only hidden">
+              <h3>Neue Ressource</h3>
+              <label>Gruppe<select name="group_id" required></select></label>
+              <label>Standort<select name="location_id" required></select></label>
+              <label>Name<input name="name" required placeholder="Beamer" /></label>
+              <label>Beschreibung<input name="description" placeholder="optional" /></label>
+              <label>Sitze <span class="hint">(optional, z. B. bei Fahrzeugen)</span><input name="seats" type="number" min="1" step="1" placeholder="5" /></label>
+              <div class="actions"><button type="submit">Anlegen</button></div>
+            </form>
+          </div>
+        </div>
+
+        <form id="form-resource-search" class="create-box">
+          <h3>Ressource buchen</h3>
+          <div class="row-2">
+            <label>Gruppe<select name="group_id"><option value="">alle</option></select></label>
+            <label>Standort<select name="location_id"><option value="">alle</option></select></label>
+          </div>
+          <fieldset class="equip-fieldset">
+            <legend>Zeitraum</legend>
+            <label class="check-inline"><input type="radio" name="resource_mode" value="hourly" checked /> stundenweise</label>
+            <label class="check-inline"><input type="radio" name="resource_mode" value="daily" /> 1 bis mehrere Tage</label>
+          </fieldset>
+          <div id="resource-hourly-fields" class="row-2">
+            <label>Tag<input name="date" type="date" lang="de-DE" /></label>
+            <label>Von
+              <span class="clock-24">
+                <select name="start_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde von"></select>
+                <span aria-hidden="true">:</span>
+                <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+              </span>
+            </label>
+            <label>Bis
+              <span class="clock-24">
+                <select name="end_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde bis"></select>
+                <span aria-hidden="true">:</span>
+                <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+              </span>
+            </label>
+          </div>
+          <div id="resource-daily-fields" class="row-2 hidden">
+            <label>Von<input name="start_date" type="date" lang="de-DE" /></label>
+            <label>Bis <span class="hint">(inklusive)</span><input name="end_date" type="date" lang="de-DE" /></label>
+          </div>
+          <label class="check-inline"><input type="checkbox" name="only_available" checked /> nur freie Ressourcen</label>
+          <div class="actions"><button type="submit">Verfügbarkeit prüfen</button></div>
+        </form>
+        <div class="section-head"><h2>Treffer</h2></div>
+        <ul class="list" id="resource-search-list"></ul>
       </section>
 
       <section id="view-bookings" class="panel app-panel hidden">

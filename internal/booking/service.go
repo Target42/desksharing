@@ -17,7 +17,6 @@ import (
 
 const checkInLead = 15 * time.Minute
 
-
 type Service struct {
 	pool *pgxpool.Pool
 }
@@ -44,20 +43,24 @@ type AvailablePlace struct {
 }
 
 type Booking struct {
-	ID           uuid.UUID  `json:"id"`
-	TenantID     uuid.UUID  `json:"tenant_id"`
-	UserID       uuid.UUID  `json:"user_id"`
-	PlaceID      *uuid.UUID `json:"place_id,omitempty"`
-	PlaceLabel   string     `json:"place_label,omitempty"`
-	StartsAt     time.Time  `json:"starts_at"`
-	EndsAt       time.Time  `json:"ends_at"`
-	Status       string     `json:"status"`
-	BookingMode  string     `json:"booking_mode,omitempty"`
-	CheckedInAt  *time.Time `json:"checked_in_at,omitempty"`
-	CheckedOutAt *time.Time `json:"checked_out_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	CanCheckIn   bool       `json:"can_check_in"`
-	CanCheckOut  bool       `json:"can_check_out"`
+	ID            uuid.UUID  `json:"id"`
+	TenantID      uuid.UUID  `json:"tenant_id"`
+	UserID        uuid.UUID  `json:"user_id"`
+	PlaceID       *uuid.UUID `json:"place_id,omitempty"`
+	PlaceLabel    string     `json:"place_label,omitempty"`
+	ResourceID    *uuid.UUID `json:"resource_id,omitempty"`
+	ResourceName  string     `json:"resource_name,omitempty"`
+	ResourceGroup string     `json:"resource_group,omitempty"`
+	Seats         *int       `json:"seats,omitempty"`
+	StartsAt      time.Time  `json:"starts_at"`
+	EndsAt        time.Time  `json:"ends_at"`
+	Status        string     `json:"status"`
+	BookingMode   string     `json:"booking_mode,omitempty"`
+	CheckedInAt   *time.Time `json:"checked_in_at,omitempty"`
+	CheckedOutAt  *time.Time `json:"checked_out_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	CanCheckIn    bool       `json:"can_check_in"`
+	CanCheckOut   bool       `json:"can_check_out"`
 }
 
 type SearchFilter struct {
@@ -71,13 +74,24 @@ type SearchFilter struct {
 
 func (s *Service) ReleaseNoShows(ctx context.Context, tenantID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE bookings
+		UPDATE bookings AS bk
 		SET status = 'possibly_free'
-		WHERE tenant_id = $1
-		  AND place_id IS NOT NULL
-		  AND status = 'booked'
-		  AND checked_in_at IS NULL
-		  AND starts_at + interval '15 minutes' <= now()
+		FROM (
+			SELECT id,
+			       CASE
+			         WHEN (starts_at AT TIME ZONE 'Europe/Berlin')::time = time '00:00'
+			          AND (ends_at AT TIME ZONE 'Europe/Berlin')::time = time '00:00'
+			         THEN (((starts_at AT TIME ZONE 'Europe/Berlin')::date + time '08:15') AT TIME ZONE 'Europe/Berlin')
+			         ELSE starts_at + interval '15 minutes'
+			       END AS no_show_deadline
+			FROM bookings
+			WHERE tenant_id = $1
+			  AND status = 'booked'
+			  AND checked_in_at IS NULL
+		) AS deadlines
+		WHERE bk.id = deadlines.id
+		  AND bk.created_at <= deadlines.no_show_deadline
+		  AND deadlines.no_show_deadline <= now()
 	`, tenantID)
 	return err
 }
@@ -241,16 +255,7 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUI
 
 func (s *Service) ListMine(ctx context.Context, tenantID, userID uuid.UUID) ([]Booking, error) {
 	_ = s.ReleaseNoShows(ctx, tenantID)
-	rows, err := s.pool.Query(ctx, `
-		SELECT bk.id, bk.tenant_id, bk.user_id, bk.place_id, bk.starts_at, bk.ends_at, bk.status::text,
-		       bk.checked_in_at, bk.checked_out_at, bk.created_at,
-		       COALESCE(b.code || '-' || f.level::text || '-' || rm.number || '-' || p.number, ''),
-		       COALESCE(p.booking_mode::text, '')
-		FROM bookings bk
-		LEFT JOIN places p ON p.id = bk.place_id
-		LEFT JOIN rooms rm ON rm.id = p.room_id
-		LEFT JOIN floors f ON f.id = rm.floor_id
-		LEFT JOIN buildings b ON b.id = f.building_id
+	rows, err := s.pool.Query(ctx, bookingListFrom+`
 		WHERE bk.tenant_id = $1 AND bk.user_id = $2
 		  AND bk.status <> 'cancelled'
 		  AND bk.ends_at > now()
@@ -266,10 +271,7 @@ func (s *Service) ListMine(ctx context.Context, tenantID, userID uuid.UUID) ([]B
 	var out []Booking
 	for rows.Next() {
 		var b Booking
-		if err := rows.Scan(
-			&b.ID, &b.TenantID, &b.UserID, &b.PlaceID, &b.StartsAt, &b.EndsAt, &b.Status,
-			&b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt, &b.PlaceLabel, &b.BookingMode,
-		); err != nil {
+		if err := scanBookingList(rows, &b); err != nil {
 			return nil, err
 		}
 		decorateBooking(&b, now)
@@ -293,23 +295,23 @@ func (s *Service) CheckIn(ctx context.Context, tenantID, userID, bookingID uuid.
 	if now.After(b.EndsAt) {
 		return nil, auth.ErrConflict("booking already ended")
 	}
-	err = s.pool.QueryRow(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE bookings
 		SET status = 'checked_in', checked_in_at = $2
 		WHERE id = $1
-		RETURNING id, tenant_id, user_id, place_id, starts_at, ends_at, status::text, checked_in_at, checked_out_at, created_at
-	`, bookingID, now).Scan(
-		&b.ID, &b.TenantID, &b.UserID, &b.PlaceID, &b.StartsAt, &b.EndsAt, &b.Status, &b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt,
-	)
+	`, bookingID, now)
 	if err != nil {
 		return nil, fmt.Errorf("check in: %w", err)
 	}
-	if b.PlaceID != nil {
-		b.PlaceLabel, _ = s.placeLabel(ctx, *b.PlaceID)
-		b.BookingMode, _ = s.placeMode(ctx, *b.PlaceID)
+	if tag.RowsAffected() == 0 {
+		return nil, auth.ErrNotFound("booking not found")
 	}
-	decorateBooking(b, now)
-	return b, nil
+	updated, err := s.reloadBooking(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	decorateBooking(updated, now)
+	return updated, nil
 }
 
 func (s *Service) CheckOut(ctx context.Context, tenantID, userID, bookingID uuid.UUID) (*Booking, error) {
@@ -324,23 +326,23 @@ func (s *Service) CheckOut(ctx context.Context, tenantID, userID, bookingID uuid
 	if b.BookingMode != "hourly" {
 		return nil, auth.ErrConflict("check-out is only required for hourly bookings")
 	}
-	err = s.pool.QueryRow(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE bookings
 		SET status = 'checked_out', checked_out_at = $2, ends_at = LEAST(ends_at, $2)
 		WHERE id = $1
-		RETURNING id, tenant_id, user_id, place_id, starts_at, ends_at, status::text, checked_in_at, checked_out_at, created_at
-	`, bookingID, now).Scan(
-		&b.ID, &b.TenantID, &b.UserID, &b.PlaceID, &b.StartsAt, &b.EndsAt, &b.Status, &b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt,
-	)
+	`, bookingID, now)
 	if err != nil {
 		return nil, fmt.Errorf("check out: %w", err)
 	}
-	if b.PlaceID != nil {
-		b.PlaceLabel, _ = s.placeLabel(ctx, *b.PlaceID)
-		b.BookingMode = "hourly"
+	if tag.RowsAffected() == 0 {
+		return nil, auth.ErrNotFound("booking not found")
 	}
-	decorateBooking(b, now)
-	return b, nil
+	updated, err := s.reloadBooking(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	decorateBooking(updated, now)
+	return updated, nil
 }
 
 func (s *Service) Cancel(ctx context.Context, tenantID, userID, bookingID uuid.UUID) (*Booking, error) {
@@ -351,42 +353,30 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, bookingID uuid.U
 	if b.Status != "booked" && b.Status != "possibly_free" {
 		return nil, auth.ErrConflict("booking cannot be cancelled")
 	}
-	err = s.pool.QueryRow(ctx, `
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE bookings
 		SET status = 'cancelled'
 		WHERE id = $1
-		RETURNING id, tenant_id, user_id, place_id, starts_at, ends_at, status::text, checked_in_at, checked_out_at, created_at
-	`, bookingID).Scan(
-		&b.ID, &b.TenantID, &b.UserID, &b.PlaceID, &b.StartsAt, &b.EndsAt, &b.Status, &b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt,
-	)
+	`, bookingID)
 	if err != nil {
 		return nil, fmt.Errorf("cancel: %w", err)
 	}
-	if b.PlaceID != nil {
-		b.PlaceLabel, _ = s.placeLabel(ctx, *b.PlaceID)
-		b.BookingMode, _ = s.placeMode(ctx, *b.PlaceID)
+	if tag.RowsAffected() == 0 {
+		return nil, auth.ErrNotFound("booking not found")
 	}
-	decorateBooking(b, time.Now().UTC())
-	return b, nil
+	updated, err := s.reloadBooking(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	decorateBooking(updated, time.Now().UTC())
+	return updated, nil
 }
 
 func (s *Service) getOwned(ctx context.Context, tenantID, userID, bookingID uuid.UUID) (*Booking, error) {
 	var b Booking
-	err := s.pool.QueryRow(ctx, `
-		SELECT bk.id, bk.tenant_id, bk.user_id, bk.place_id, bk.starts_at, bk.ends_at, bk.status::text,
-		       bk.checked_in_at, bk.checked_out_at, bk.created_at,
-		       COALESCE(b.code || '-' || f.level::text || '-' || rm.number || '-' || p.number, ''),
-		       COALESCE(p.booking_mode::text, '')
-		FROM bookings bk
-		LEFT JOIN places p ON p.id = bk.place_id
-		LEFT JOIN rooms rm ON rm.id = p.room_id
-		LEFT JOIN floors f ON f.id = rm.floor_id
-		LEFT JOIN buildings b ON b.id = f.building_id
+	err := scanBookingList(s.pool.QueryRow(ctx, bookingListFrom+`
 		WHERE bk.id = $1 AND bk.tenant_id = $2 AND bk.user_id = $3
-	`, bookingID, tenantID, userID).Scan(
-		&b.ID, &b.TenantID, &b.UserID, &b.PlaceID, &b.StartsAt, &b.EndsAt, &b.Status,
-		&b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt, &b.PlaceLabel, &b.BookingMode,
-	)
+	`, bookingID, tenantID, userID), &b)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrNotFound("booking not found")
@@ -476,12 +466,6 @@ func (s *Service) placeLabel(ctx context.Context, placeID uuid.UUID) (string, er
 		WHERE p.id = $1
 	`, placeID).Scan(&label)
 	return label, err
-}
-
-func (s *Service) placeMode(ctx context.Context, placeID uuid.UUID) (string, error) {
-	var mode string
-	err := s.pool.QueryRow(ctx, `SELECT booking_mode::text FROM places WHERE id = $1`, placeID).Scan(&mode)
-	return mode, err
 }
 
 func decorateBooking(b *Booking, now time.Time) {

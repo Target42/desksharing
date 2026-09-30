@@ -18,10 +18,10 @@ const (
 type DayStatus string
 
 const (
-	DayFree     DayStatus = "free"
-	DayPartial  DayStatus = "partial"
-	DayFull     DayStatus = "full"
-	DayBlocked  DayStatus = "blocked"
+	DayFree    DayStatus = "free"
+	DayPartial DayStatus = "partial"
+	DayFull    DayStatus = "full"
+	DayBlocked DayStatus = "blocked"
 )
 
 type RoomWeekOverview struct {
@@ -79,9 +79,9 @@ type PlaceDayDetail struct {
 }
 
 type MyWeekCalendar struct {
-	WeekStart string           `json:"week_start"`
-	WeekEnd   string           `json:"week_end"`
-	Days      []MyCalendarDay  `json:"days"`
+	WeekStart string          `json:"week_start"`
+	WeekEnd   string          `json:"week_end"`
+	Days      []MyCalendarDay `json:"days"`
 }
 
 type MyCalendarDay struct {
@@ -142,16 +142,7 @@ func (s *Service) MyWeek(ctx context.Context, tenantID, userID uuid.UUID, weekSt
 	weekStart = MondayOf(weekStart)
 	weekEnd := weekStart.AddDate(0, 0, 7)
 
-	rows, err := s.pool.Query(ctx, `
-		SELECT bk.id, bk.tenant_id, bk.user_id, bk.place_id, bk.starts_at, bk.ends_at, bk.status::text,
-		       bk.checked_in_at, bk.checked_out_at, bk.created_at,
-		       COALESCE(b.code || '-' || f.level::text || '-' || rm.number || '-' || p.number, ''),
-		       COALESCE(p.booking_mode::text, '')
-		FROM bookings bk
-		LEFT JOIN places p ON p.id = bk.place_id
-		LEFT JOIN rooms rm ON rm.id = p.room_id
-		LEFT JOIN floors f ON f.id = rm.floor_id
-		LEFT JOIN buildings b ON b.id = f.building_id
+	rows, err := s.pool.Query(ctx, bookingListFrom+`
 		WHERE bk.tenant_id = $1
 		  AND bk.user_id = $2
 		  AND bk.status IN ('booked', 'checked_in', 'checked_out', 'possibly_free')
@@ -175,10 +166,7 @@ func (s *Service) MyWeek(ctx context.Context, tenantID, userID uuid.UUID, weekSt
 	now := time.Now().UTC()
 	for rows.Next() {
 		var b Booking
-		if err := rows.Scan(
-			&b.ID, &b.TenantID, &b.UserID, &b.PlaceID, &b.StartsAt, &b.EndsAt, &b.Status,
-			&b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt, &b.PlaceLabel, &b.BookingMode,
-		); err != nil {
+		if err := scanBookingList(rows, &b); err != nil {
 			return nil, err
 		}
 		decorateBooking(&b, now)
@@ -389,10 +377,10 @@ func (s *Service) PlaceDay(ctx context.Context, tenantID, placeID uuid.UUID, dat
 	dayEnd := dayStart.AddDate(0, 0, 1)
 
 	var (
-		label      string
-		mode       string
-		active     bool
-		roomOK     bool
+		label  string
+		mode   string
+		active bool
+		roomOK bool
 	)
 	err := s.pool.QueryRow(ctx, `
 		SELECT b.code || '-' || f.level::text || '-' || rm.number || '-' || p.number,

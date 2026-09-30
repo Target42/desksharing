@@ -4,6 +4,7 @@ import (
 	"context"
 	"io/fs"
 	"net/http"
+	"strings"
 	"time"
 
 	"desksharing/internal/auth"
@@ -37,7 +38,9 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("GET /app/locations", spa)
 	mux.HandleFunc("GET /app/place-types", spa)
 	mux.HandleFunc("GET /app/equipments", spa)
+	mux.HandleFunc("GET /app/resources", spa)
 	mux.HandleFunc("GET /app/bookings", spa)
+	mux.HandleFunc("GET /{slug}", serveTenantEntry)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -120,6 +123,13 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("DELETE /api/v1/equipments/{id}", admin(catH.DeleteEquipment))
 	mux.HandleFunc("POST /api/v1/catalog/seed-demo", admin(catH.SeedDemo))
 
+	mux.HandleFunc("GET /api/v1/resource-groups", tenant(catH.ListResourceGroups))
+	mux.HandleFunc("POST /api/v1/resource-groups", admin(catH.CreateResourceGroup))
+	mux.HandleFunc("DELETE /api/v1/resource-groups/{id}", admin(catH.DeleteResourceGroup))
+	mux.HandleFunc("GET /api/v1/resources", tenant(catH.ListResources))
+	mux.HandleFunc("POST /api/v1/resources", admin(catH.CreateResource))
+	mux.HandleFunc("DELETE /api/v1/resources/{id}", admin(catH.DeleteResource))
+
 	mux.HandleFunc("GET /api/v1/rooms", tenant(catH.ListAllRooms))
 
 	mux.HandleFunc("GET /api/v1/bookings/search", tenant(bookH.Search))
@@ -127,12 +137,53 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("GET /api/v1/bookings/my-week", tenant(bookH.MyWeek))
 	mux.HandleFunc("GET /api/v1/bookings/room-week", tenant(bookH.RoomWeek))
 	mux.HandleFunc("GET /api/v1/bookings/place-day", tenant(bookH.PlaceDay))
+	mux.HandleFunc("GET /api/v1/bookings/resources", tenant(bookH.SearchResources))
 	mux.HandleFunc("POST /api/v1/bookings", tenant(bookH.Create))
 	mux.HandleFunc("POST /api/v1/bookings/{id}/check-in", tenant(bookH.CheckIn))
 	mux.HandleFunc("POST /api/v1/bookings/{id}/check-out", tenant(bookH.CheckOut))
 	mux.HandleFunc("POST /api/v1/bookings/{id}/cancel", tenant(bookH.Cancel))
 
-	return mux
+	return withCanonicalTenantPath(mux)
+}
+
+func serveTenantEntry(w http.ResponseWriter, r *http.Request) {
+	if !auth.ValidTenantSlug(r.PathValue("slug")) {
+		http.NotFound(w, r)
+		return
+	}
+	serveIndex(w, r)
+}
+
+// canonicalTenantPath redirects /Acme and /acme/ to /acme. Reserved app paths stay untouched.
+func canonicalTenantPath(path string) (string, bool) {
+	if len(path) < 2 || !strings.HasPrefix(path, "/") {
+		return "", false
+	}
+	raw := strings.TrimSuffix(path, "/")
+	if strings.Contains(raw[1:], "/") {
+		return "", false
+	}
+	slug := strings.ToLower(raw[1:])
+	if !auth.ValidTenantSlug(slug) {
+		return "", false
+	}
+	want := "/" + slug
+	if path == want {
+		return "", false
+	}
+	return want, true
+}
+
+func withCanonicalTenantPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			if dest, ok := canonicalTenantPath(r.URL.Path); ok {
+				http.Redirect(w, r, dest, http.StatusPermanentRedirect)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {

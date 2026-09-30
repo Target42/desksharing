@@ -85,13 +85,26 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          'Desksharing',
-                          style: Theme.of(context).textTheme.headlineMedium
-                              ?.copyWith(
-                                color: forest,
-                                fontWeight: FontWeight.w700,
+                        Row(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Image.asset(
+                                'assets/logo.png',
+                                width: 44,
+                                height: 44,
                               ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              'Desksharing',
+                              style: Theme.of(context).textTheme.headlineMedium
+                                  ?.copyWith(
+                                    color: forest,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 6),
                         Text(
