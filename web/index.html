@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Desksharing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" href="/assets/logo.png" type="image/png" />
+    <link rel="stylesheet" href="/assets/app.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+  </head>
+  <body>
+    <main class="shell">
+      <section id="view-login" class="panel hidden">
+        <h1 class="brand with-mark">Desksharing</h1>
+        <p class="lead" id="login-lead">Anmelden und Arbeitsplätze verwalten.</p>
+        <div id="login-msg" class="msg" role="status"></div>
+        <form id="form-login">
+          <label>E-Mail<input name="email" type="email" autocomplete="username" required /></label>
+          <label>Passwort<input name="password" type="password" autocomplete="current-password" required /></label>
+          <label id="login-slug-field">
+            Mandanten-Slug <span class="hint">(nur wenn dieselbe E-Mail in mehreren Firmen existiert — sonst /firma-slug öffnen)</span>
+            <input name="tenant_slug" type="text" autocomplete="organization" placeholder="acme" />
+          </label>
+          <div class="actions">
+            <button type="submit">Anmelden</button>
+            <a class="button secondary" href="/register">Firma registrieren</a>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-register" class="panel wide hidden">
+        <h1 class="brand with-mark">Desksharing</h1>
+        <p class="lead">Neuen Mandanten anlegen — danach E-Mail bestätigen.</p>
+        <div id="register-msg" class="msg" role="status"></div>
+        <form id="form-register">
+          <div class="row-2">
+            <label>Firmenname<input name="tenant_name" required placeholder="Acme GmbH" /></label>
+            <label>Slug
+              <input name="tenant_slug" required placeholder="acme" pattern="[a-z0-9\-]+" />
+              <span class="hint">Anmeldeadresse, z. B. /acme. Danach nicht mehr in der URL.</span>
+            </label>
+          </div>
+          <div class="row-2">
+            <label>Admin-Name<input name="admin_display_name" required placeholder="Alex Admin" /></label>
+            <label>Admin-E-Mail<input name="admin_email" type="email" required /></label>
+          </div>
+          <label>Passwort (min. 8 Zeichen)<input name="admin_password" type="password" minlength="8" required /></label>
+          <div class="actions">
+            <button type="submit">Registrieren</button>
+            <a class="button secondary" href="/login">Zur Anmeldung</a>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-invite" class="panel hidden">
+        <h1 class="brand with-mark">Desksharing</h1>
+        <p class="lead">Lege ein Passwort fest, um die Einladung anzunehmen.</p>
+        <div id="invite-msg" class="msg" role="status"></div>
+        <form id="form-invite">
+          <label>Einladungs-Token<input id="invite-token" name="token" required /></label>
+          <label>Passwort (min. 8 Zeichen)<input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
+          <label>Passwort wiederholen<input name="password2" type="password" minlength="8" required autocomplete="new-password" /></label>
+          <div class="actions">
+            <button type="submit">Passwort setzen</button>
+            <a class="button secondary" href="/login">Zur Anmeldung</a>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-verify" class="panel hidden">
+        <h1 class="brand with-mark">Desksharing</h1>
+        <p class="lead">E-Mail-Adresse bzw. Mandantenregistrierung bestätigen.</p>
+        <div id="verify-msg" class="msg" role="status"></div>
+        <form id="form-verify">
+          <label>Bestätigungs-Token<input id="verify-token" name="token" required /></label>
+          <div class="actions">
+            <button type="submit">Bestätigen</button>
+            <a class="button secondary" href="/login">Zur Anmeldung</a>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-home" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand with-mark">Desksharing</h1>
+            <p class="lead" id="home-lead">Angemeldet als <strong id="home-name"></strong><span id="home-lead-extra"></span></p>
+          </div>
+          <nav class="app-nav" data-app-nav="Konto"></nav>
+        </div>
+        <ul class="meta">
+          <li><span>E-Mail</span><strong id="home-email"></strong></li>
+          <li><span>Rolle</span><strong id="home-role"></strong></li>
+          <li class="admin-only hidden"><span>Mandant</span><strong id="home-tenant" class="mono"></strong></li>
+          <li class="admin-only hidden"><span>Identity Provider</span><strong id="home-provider"></strong></li>
+        </ul>
+        <div class="actions employee-only hidden" id="home-employee-actions">
+          <a class="button" href="/app/bookings">Arbeitsplatz buchen</a>
+          <a class="button secondary" href="/app/resources">Ressource buchen</a>
+        </div>
+      </section>
+
+      <section id="view-users" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Mitarbeiter</h1>
+            <p class="lead">Einzeln einladen oder per CSV- bzw. Excel-Datei importieren. Jede Person bekommt einen Link, um ein Passwort zu setzen.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Mitarbeiter"></nav>
+        </div>
+        <div id="users-msg" class="msg" role="status"></div>
+        <div class="split">
+          <div>
+            <div class="section-head"><h2>Team</h2></div>
+            <ul class="list" id="users-list"></ul>
+          </div>
+          <div class="side-stack">
+            <form id="form-user-create" class="create-box">
+              <h3>Einzeln einladen</h3>
+              <label>Name<input name="display_name" required placeholder="Alex Beispiel" /></label>
+              <label>E-Mail<input name="email" type="email" required /></label>
+              <div class="actions"><button type="submit">Einladen</button></div>
+            </form>
+            <form id="form-user-import" class="create-box">
+              <h3>Datei importieren</h3>
+              <p class="hint">CSV oder Excel (.xlsx). Spalten <strong>E-Mail</strong> und <strong>Name</strong>, erste Zeile ist die Überschrift. Komma oder Semikolon.</p>
+              <label class="file-label">Datei
+                <input type="file" name="file" accept=".csv,.txt,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+              </label>
+              <div class="actions">
+                <button type="submit">Importieren</button>
+                <button type="button" class="secondary" id="btn-template-csv">Vorlage CSV</button>
+                <button type="button" class="secondary" id="btn-template-xlsx">Vorlage Excel</button>
+              </div>
+              <div id="import-result"></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-locations" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Standorte</h1>
+            <p class="lead">Hierarchie: Standort → Gebäude → Stockwerk → Raum → Platz. Adresse und Kartenposition im Standort setzen.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Standorte"></nav>
+        </div>
+        <div id="locations-msg" class="msg" role="status"></div>
+        <div id="seed-demo-box" class="create-box admin-only hidden">
+          <h3>Schnellstart</h3>
+          <p class="hint">Legt zusätzlich einen Beispiel-Standort mit Gebäude, Raum und 3 Plätzen an (zum Testen der Buchung).</p>
+          <div class="actions">
+            <button type="button" id="btn-seed-demo">Beispiel-Standort anlegen</button>
+          </div>
+        </div>
+        <nav class="crumbs" id="locations-crumbs"></nav>
+        <div id="locations-overview-box" class="map-panel hidden">
+          <div class="section-head"><h2>Übersichtskarte</h2></div>
+          <div id="locations-overview-map" class="geo-map"></div>
+          <p class="hint" id="locations-overview-hint"></p>
+        </div>
+        <div id="location-detail-box" class="map-panel hidden">
+          <div class="section-head"><h2>Adresse &amp; Position</h2></div>
+          <p class="hint" id="location-detail-readonly"></p>
+          <form id="form-location-address" class="admin-only hidden">
+            <label>Name<input name="name" id="loc-name" required /></label>
+            <label>Adresse suchen
+              <div class="geo-search">
+                <input name="address_query" id="loc-address-search" type="search" autocomplete="off" placeholder="Straße, PLZ, Ort" />
+                <button type="button" class="secondary" id="btn-loc-search">Suchen</button>
+              </div>
+            </label>
+            <ul id="loc-search-results" class="geo-results"></ul>
+            <label>Gewählte Adresse<input name="address" id="loc-address" readonly placeholder="über Suche oder Kartenklick" /></label>
+            <input type="hidden" name="latitude" id="loc-lat" />
+            <input type="hidden" name="longitude" id="loc-lng" />
+            <div id="loc-picker-map" class="geo-map geo-map-picker"></div>
+            <p class="geo-coords" id="loc-coords-hint">Karte anklicken oder Adresse suchen.</p>
+            <div class="actions"><button type="submit">Position speichern</button></div>
+          </form>
+        </div>
+        <div id="floor-plan-box" class="map-panel hidden">
+          <div class="section-head"><h2>Stockwerkplan</h2></div>
+          <p class="hint">Hier nur Räume als Rechtecke markieren. Plätze legst du danach in der Raumansicht fest.</p>
+          <div id="floor-plan-upload" class="admin-only hidden">
+            <label class="file-label">Plan-Bild (PNG/JPG/WebP)
+              <input type="file" id="floor-plan-file" accept="image/png,image/jpeg,image/webp" />
+            </label>
+            <div class="actions"><button type="button" id="btn-floor-plan-upload">Hochladen</button></div>
+          </div>
+          <div id="floor-plan-editor" class="floor-plan-editor hidden">
+            <div class="floor-plan-toolbar admin-only hidden" id="floor-plan-toolbar">
+              <label>Raum<select id="floor-plan-target"></select></label>
+              <button type="button" class="secondary" id="btn-floor-plan-clear-target">Rechteck löschen</button>
+            </div>
+            <div class="plan-zoom-bar">
+              <button type="button" class="secondary" id="btn-floor-plan-zoom-out" title="Verkleinern">−</button>
+              <button type="button" class="secondary" id="btn-floor-plan-zoom-reset" title="Einpassen">Einpassen</button>
+              <button type="button" class="secondary" id="btn-floor-plan-zoom-in" title="Vergrößern">+</button>
+            </div>
+            <div class="floor-plan-stage plan-stage" id="floor-plan-stage">
+              <img id="floor-plan-image" class="plan-source-img" alt="" />
+              <canvas id="floor-plan-canvas"></canvas>
+            </div>
+            <p class="hint" id="floor-plan-hint"></p>
+          </div>
+          <p class="hint" id="floor-plan-empty">Noch kein Plan für dieses Stockwerk.</p>
+        </div>
+        <div id="room-plan-box" class="map-panel hidden">
+          <div class="section-head"><h2>Raumplan</h2></div>
+          <p class="hint">Ausschnitt des Stockwerkplans für diesen Raum — hier Plätze zeichnen oder verteilen.</p>
+          <div id="room-plan-editor" class="floor-plan-editor hidden">
+            <div class="floor-plan-toolbar admin-only hidden" id="room-plan-toolbar">
+              <label>Platz<select id="room-plan-target"></select></label>
+              <button type="button" class="secondary" id="btn-room-plan-clear-target">Rechteck löschen</button>
+              <button type="button" class="secondary" id="btn-room-plan-distribute">Plätze verteilen</button>
+            </div>
+            <div class="plan-zoom-bar">
+              <button type="button" class="secondary" id="btn-room-plan-zoom-out" title="Verkleinern">−</button>
+              <button type="button" class="secondary" id="btn-room-plan-zoom-reset" title="Einpassen">Einpassen</button>
+              <button type="button" class="secondary" id="btn-room-plan-zoom-in" title="Vergrößern">+</button>
+            </div>
+            <div class="floor-plan-stage plan-stage room-plan-stage" id="room-plan-stage">
+              <canvas id="room-plan-canvas"></canvas>
+            </div>
+            <p class="hint" id="room-plan-hint"></p>
+          </div>
+          <p class="hint" id="room-plan-empty">Raumplan nicht verfügbar.</p>
+        </div>
+        <div class="split">
+          <div>
+            <div class="section-head"><h2 id="locations-list-title">Standorte</h2></div>
+            <ul class="list" id="locations-list"></ul>
+          </div>
+          <div class="side-stack">
+            <form id="form-catalog-create" class="create-box admin-only hidden">
+              <h3 id="create-title">Neu anlegen</h3>
+              <div id="create-fields"></div>
+              <div class="actions"><button type="submit">Anlegen</button></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-place-types" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Platztypen</h1>
+            <p class="lead">Grundtypen für Arbeitsplätze.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Platztypen"></nav>
+        </div>
+        <div id="place-types-msg" class="msg" role="status"></div>
+        <div class="split">
+          <ul class="list" id="place-types-list"></ul>
+          <form id="form-place-type" class="create-box admin-only hidden">
+            <h3>Neuer Platztyp</h3>
+            <label>Name<input name="name" required placeholder="Arbeitsplatz 2 Bildschirme" /></label>
+            <label>Beschreibung<input name="description" placeholder="optional" /></label>
+            <div class="actions"><button type="submit">Anlegen</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section id="view-equipments" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Ausstattungen</h1>
+            <p class="lead">Add-ons für Plätze (Dockingstation, Grafikkarte, …).</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Ausstattung"></nav>
+        </div>
+        <div id="equipments-msg" class="msg" role="status"></div>
+        <div class="split">
+          <ul class="list" id="equipments-list"></ul>
+          <form id="form-equipment" class="create-box admin-only hidden">
+            <h3>Neue Ausstattung</h3>
+            <label>Name<input name="name" required placeholder="2 Dockingstations" /></label>
+            <div class="actions"><button type="submit">Anlegen</button></div>
+          </form>
+        </div>
+      </section>
+
+      <section id="view-resources" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Ressourcen</h1>
+            <p class="lead">Eigenständig buchbar, stundenweise oder für einen bis mehrere Tage. Zum Beispiel IT-Ausrüstung oder Fahrzeuge.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Ressourcen"></nav>
+        </div>
+        <div id="resources-msg" class="msg" role="status"></div>
+        <div class="split">
+          <div>
+            <div class="section-head"><h2>Gruppen</h2></div>
+            <div class="actions">
+              <button type="button" class="secondary" id="btn-resource-groups-all">Alle</button>
+            </div>
+            <ul class="list" id="resource-groups-list"></ul>
+            <form id="form-resource-group" class="create-box admin-only hidden">
+              <h3>Neue Gruppe</h3>
+              <label>Name<input name="name" required placeholder="IT-Ausrüstung" /></label>
+              <div class="actions"><button type="submit">Anlegen</button></div>
+            </form>
+          </div>
+          <div>
+            <div class="section-head"><h2>Ressourcen</h2></div>
+            <ul class="list" id="resources-list"></ul>
+            <form id="form-resource" class="create-box admin-only hidden">
+              <h3>Neue Ressource</h3>
+              <label>Gruppe<select name="group_id" required></select></label>
+              <label>Standort<select name="location_id" required></select></label>
+              <label>Name<input name="name" required placeholder="Beamer" /></label>
+              <label>Beschreibung<input name="description" placeholder="optional" /></label>
+              <label>Sitze <span class="hint">(optional, z. B. bei Fahrzeugen)</span><input name="seats" type="number" min="1" step="1" placeholder="5" /></label>
+              <div class="actions"><button type="submit">Anlegen</button></div>
+            </form>
+          </div>
+        </div>
+
+        <form id="form-resource-search" class="create-box">
+          <h3>Ressource buchen</h3>
+          <div class="row-2">
+            <label>Gruppe<select name="group_id"><option value="">alle</option></select></label>
+            <label>Standort<select name="location_id"><option value="">alle</option></select></label>
+          </div>
+          <fieldset class="equip-fieldset">
+            <legend>Zeitraum</legend>
+            <label class="check-inline"><input type="radio" name="resource_mode" value="hourly" checked /> stundenweise</label>
+            <label class="check-inline"><input type="radio" name="resource_mode" value="daily" /> 1 bis mehrere Tage</label>
+          </fieldset>
+          <div id="resource-hourly-fields" class="row-2">
+            <label>Tag<input name="date" type="date" lang="de-DE" /></label>
+            <label>Von
+              <span class="clock-24">
+                <select name="start_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde von"></select>
+                <span aria-hidden="true">:</span>
+                <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+              </span>
+            </label>
+            <label>Bis
+              <span class="clock-24">
+                <select name="end_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde bis"></select>
+                <span aria-hidden="true">:</span>
+                <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+              </span>
+            </label>
+          </div>
+          <div id="resource-daily-fields" class="row-2 hidden">
+            <label>Von<input name="start_date" type="date" lang="de-DE" /></label>
+            <label>Bis <span class="hint">(inklusive)</span><input name="end_date" type="date" lang="de-DE" /></label>
+          </div>
+          <label class="check-inline"><input type="checkbox" name="only_available" checked /> nur freie Ressourcen</label>
+          <div class="actions"><button type="submit">Verfügbarkeit prüfen</button></div>
+        </form>
+        <div class="section-head"><h2>Treffer</h2></div>
+        <ul class="list" id="resource-search-list"></ul>
+      </section>
+
+      <section id="view-bookings" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Buchungen</h1>
+            <p class="lead">Freie Plätze suchen, buchen und einchecken.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Buchungen"></nav>
+        </div>
+        <div id="bookings-msg" class="msg" role="status"></div>
+        <div id="bookings-empty-hint" class="create-box hidden">
+          <h3>Keine buchbaren Plätze</h3>
+          <p class="hint" id="bookings-empty-text"></p>
+          <div class="actions" id="bookings-empty-actions"></div>
+        </div>
+
+        <div class="create-box">
+          <div class="week-toolbar">
+            <h3>Meine Woche</h3>
+            <div class="week-nav">
+              <button type="button" class="secondary" id="btn-my-week-prev">←</button>
+              <strong id="my-week-label"></strong>
+              <button type="button" class="secondary" id="btn-my-week-next">→</button>
+            </div>
+          </div>
+          <div class="week-calendar" id="my-week-calendar"></div>
+        </div>
+
+        <div class="create-box">
+          <div class="week-toolbar">
+            <h3>Raum-Wochenübersicht</h3>
+            <div class="week-nav">
+              <button type="button" class="secondary" id="btn-room-week-prev">←</button>
+              <strong id="room-week-label"></strong>
+              <button type="button" class="secondary" id="btn-room-week-next">→</button>
+            </div>
+          </div>
+          <div class="week-filters">
+            <label>Standort<select id="room-week-location"></select></label>
+            <label>Gebäude<select id="room-week-building" disabled></select></label>
+            <label>Stockwerk<select id="room-week-floor" disabled></select></label>
+            <label>Raum<select id="room-week-select" disabled></select></label>
+          </div>
+          <div id="booking-plan-box" class="booking-plan hidden">
+            <div class="week-toolbar booking-plan-head">
+              <h3>Lageplan <span id="booking-plan-caption" class="booking-plan-caption"></span></h3>
+              <div class="plan-mode-toggle" role="group" aria-label="Planansicht">
+                <button type="button" class="secondary" id="btn-booking-plan-floor" aria-pressed="true">Stockwerk</button>
+                <button type="button" class="secondary" id="btn-booking-plan-room" aria-pressed="false" disabled>Raum</button>
+              </div>
+            </div>
+            <div id="booking-plan-tools">
+              <div class="plan-zoom-bar">
+                <button type="button" class="secondary" id="btn-booking-plan-zoom-out" title="Verkleinern">−</button>
+                <button type="button" class="secondary" id="btn-booking-plan-zoom-reset" title="Einpassen">Einpassen</button>
+                <button type="button" class="secondary" id="btn-booking-plan-zoom-in" title="Vergrößern">+</button>
+              </div>
+              <div class="floor-plan-stage plan-stage booking-plan-stage" id="booking-plan-stage">
+                <canvas id="booking-plan-canvas" aria-label="Lageplan"></canvas>
+              </div>
+            </div>
+            <p class="hint legend-line" id="booking-plan-legend">
+              <span><span class="plan-swatch room"></span>Raum</span>
+              <span><span class="plan-swatch room-selected"></span>gewählter Raum</span>
+              <span><span class="plan-swatch place"></span>Platz</span>
+            </p>
+            <p class="hint" id="booking-plan-hint"></p>
+            <p class="hint hidden" id="booking-plan-empty"></p>
+          </div>
+          <div class="week-grid-wrap">
+            <table class="week-grid" id="room-week-grid">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="hint legend-line">
+            <span class="cell-swatch free"></span> frei
+            <span class="cell-swatch partial"></span> teilweise
+            <span class="cell-swatch full"></span> ganzer Tag
+            <span class="cell-swatch blocked"></span> gesperrt
+          </p>
+          <form id="form-week-book" class="create-box week-book-dialog hidden">
+            <h3>Platz buchen</h3>
+            <p class="lead" id="week-book-summary"></p>
+            <input type="hidden" name="place_id" />
+            <input type="hidden" name="date" />
+            <div class="day-scale">
+              <div class="day-timeline" id="week-book-timeline" role="img" aria-label="Belegung zwischen 08:00 und 18:00"></div>
+              <div class="day-axis" id="week-book-axis" aria-hidden="true"></div>
+              <p class="hint day-busy-caption" id="week-book-busy"></p>
+            </div>
+            <div id="week-book-free-slots" class="slot-chips"></div>
+            <fieldset class="equip-fieldset">
+              <legend>Buchungsumfang</legend>
+              <label class="check-inline"><input type="radio" name="scope" value="full" checked /> ganzer Tag (08:00–18:00)</label>
+              <label class="check-inline"><input type="radio" name="scope" value="partial" /> teilweise</label>
+            </fieldset>
+            <div id="week-book-partial-fields" class="row-2 hidden">
+              <label>Von
+                <span class="clock-24">
+                  <select name="start_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde von"></select>
+                  <span aria-hidden="true">:</span>
+                  <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+                </span>
+              </label>
+              <label>Bis
+                <span class="clock-24">
+                  <select name="end_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde bis"></select>
+                  <span aria-hidden="true">:</span>
+                  <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+                </span>
+              </label>
+            </div>
+            <div class="actions">
+              <button type="submit">Buchen</button>
+              <button type="button" class="secondary" id="btn-week-book-cancel">Abbrechen</button>
+            </div>
+          </form>
+        </div>
+
+        <form id="form-booking-search" class="create-box">
+          <h3>Verfügbarkeit / Buchen</h3>
+          <div class="row-2">
+            <label>Von
+              <span class="clock-24">
+                <input name="start_date" type="date" lang="de-DE" required />
+                <select name="start_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde von"></select>
+                <span aria-hidden="true">:</span>
+                <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+              </span>
+            </label>
+            <label>Bis
+              <span class="clock-24">
+                <input name="end_date" type="date" lang="de-DE" required />
+                <select name="end_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde bis"></select>
+                <span aria-hidden="true">:</span>
+                <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+              </span>
+            </label>
+          </div>
+          <div class="row-2">
+            <label>Standort<select name="location_id"><option value="">alle</option></select></label>
+            <label>Platztyp<select name="place_type_id"><option value="">alle</option></select></label>
+          </div>
+          <label>Ausstattung (Mehrfachauswahl)<select name="equipment_ids" multiple size="4"></select></label>
+          <label class="check-inline"><input type="checkbox" name="only_available" checked /> nur freie Plätze</label>
+          <div class="actions"><button type="submit">Suchen</button></div>
+        </form>
+        <div class="section-head"><h2>Treffer</h2></div>
+        <ul class="list" id="booking-search-list"></ul>
+        <div class="section-head"><h2>Meine Buchungen</h2></div>
+        <ul class="list" id="my-bookings-list"></ul>
+      </section>
+    </main>
+
+    <div id="equip-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="equip-modal-title">
+      <div class="modal-backdrop" data-equip-close tabindex="-1"></div>
+      <form id="form-place-equipments" class="modal-panel">
+        <div class="modal-head">
+          <h3 id="equip-modal-title">Ausstattung für <span id="equip-place-label"></span></h3>
+          <button type="button" class="modal-close" data-equip-close aria-label="Schließen">×</button>
+        </div>
+        <label class="equip-search-label">Suchen
+          <input type="search" id="equip-filter" placeholder="z. B. Docking, Monitor…" autocomplete="off" />
+        </label>
+        <p class="hint" id="equip-selected-count"></p>
+        <div id="equip-checkboxes" class="check-grid equip-check-scroll"></div>
+        <input type="hidden" name="place_id" id="equip-place-id" />
+        <div class="actions modal-actions">
+          <button type="button" class="secondary" data-equip-close>Abbrechen</button>
+          <button type="submit">Speichern</button>
+        </div>
+      </form>
+    </div>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

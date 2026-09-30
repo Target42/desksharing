@@ -1,0 +1,11 @@
+-- +goose Up
+ALTER TABLE locations
+    ADD COLUMN IF NOT EXISTS address TEXT,
+    ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+
+-- +goose Down
+ALTER TABLE locations
+    DROP COLUMN IF EXISTS longitude,
+    DROP COLUMN IF EXISTS latitude,
+    DROP COLUMN IF EXISTS address;
