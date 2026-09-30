@@ -136,6 +136,7 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("GET /api/v1/bookings/mine", tenant(bookH.ListMine))
 	mux.HandleFunc("GET /api/v1/bookings/my-week", tenant(bookH.MyWeek))
 	mux.HandleFunc("GET /api/v1/bookings/room-week", tenant(bookH.RoomWeek))
+	mux.HandleFunc("GET /api/v1/bookings/resource-week", tenant(bookH.ResourceWeek))
 	mux.HandleFunc("GET /api/v1/bookings/place-day", tenant(bookH.PlaceDay))
 	mux.HandleFunc("GET /api/v1/bookings/resources", tenant(bookH.SearchResources))
 	mux.HandleFunc("POST /api/v1/bookings", tenant(bookH.Create))

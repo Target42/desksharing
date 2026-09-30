@@ -335,6 +335,67 @@
           </div>
         </div>
 
+        <div class="create-box">
+          <div class="week-toolbar">
+            <h3>Gebuchte Ressourcen</h3>
+            <div class="week-nav">
+              <button type="button" class="secondary" id="btn-resource-week-prev">←</button>
+              <strong id="resource-week-label"></strong>
+              <button type="button" class="secondary" id="btn-resource-week-next">→</button>
+            </div>
+          </div>
+          <div class="week-filters">
+            <label>Gruppe<select id="resource-week-group"><option value="">Gruppe wählen</option></select></label>
+          </div>
+          <div class="week-grid-wrap">
+            <table class="week-grid resource-week-grid" id="resource-week-grid">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="hint legend-line">
+            <span class="cell-swatch free"></span> frei
+            <span class="cell-swatch partial"></span> stundenweise
+            <span class="cell-swatch full"></span> ganzer Tag
+          </p>
+          <p class="hint">Klick auf einen freien oder stundenweise belegten Tag bucht diese Ressource.</p>
+          <form id="form-resource-week-book" class="create-box week-book-dialog hidden">
+            <h3>Ressource buchen</h3>
+            <p class="lead" id="resource-week-book-summary"></p>
+            <p class="hint" id="resource-week-book-busy"></p>
+            <input type="hidden" name="resource_id" />
+            <fieldset class="equip-fieldset">
+              <legend>Zeitraum</legend>
+              <label class="check-inline"><input type="radio" name="mode" value="hourly" checked /> stundenweise</label>
+              <label class="check-inline"><input type="radio" name="mode" value="daily" /> ganzer Tag oder mehrere Tage</label>
+            </fieldset>
+            <div id="resource-week-hourly" class="row-2">
+              <label>Von
+                <span class="clock-24">
+                  <select name="start_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde von"></select>
+                  <span aria-hidden="true">:</span>
+                  <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+                </span>
+              </label>
+              <label>Bis
+                <span class="clock-24">
+                  <select name="end_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde bis"></select>
+                  <span aria-hidden="true">:</span>
+                  <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+                </span>
+              </label>
+            </div>
+            <div id="resource-week-daily" class="row-2 hidden">
+              <label>Von<input name="start_date" type="date" lang="de-DE" /></label>
+              <label>Bis <span class="hint">(inklusive)</span><input name="end_date" type="date" lang="de-DE" /></label>
+            </div>
+            <div class="actions">
+              <button type="submit">Buchen</button>
+              <button type="button" class="secondary" id="btn-resource-week-book-cancel">Abbrechen</button>
+            </div>
+          </form>
+        </div>
+
         <form id="form-resource-search" class="create-box">
           <h3>Ressource buchen</h3>
           <div class="row-2">
@@ -549,5 +610,8 @@
     </div>
 
     <script type="module" src="/assets/app.js"></script>
+    <footer class="site-footer">
+      <a href="https://github.com/Target42/desksharing" target="_blank" rel="noopener noreferrer">Quellcode auf GitHub</a>
+    </footer>
   </body>
 </html>
