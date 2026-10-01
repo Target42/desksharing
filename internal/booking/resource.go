@@ -12,6 +12,16 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+const bookingForUser = `
+bk.tenant_id = $1
+AND (
+  bk.user_id = $2
+  OR EXISTS (
+    SELECT 1 FROM team_members tm
+    WHERE tm.team_id = bk.team_id AND tm.user_id = $2
+  )
+)`
+
 const bookingListFrom = `
 SELECT bk.id, bk.tenant_id, bk.user_id, bk.place_id, bk.resource_id,
        bk.starts_at, bk.ends_at, bk.status::text,
@@ -20,7 +30,10 @@ SELECT bk.id, bk.tenant_id, bk.user_id, bk.place_id, bk.resource_id,
        COALESCE(p.booking_mode::text, ''),
        COALESCE(rg.name, ''),
        COALESCE(rs.name, ''),
-       rs.seats
+       rs.seats,
+       bk.team_id,
+       COALESCE(t.name, ''),
+       COALESCE(NULLIF(u.display_name, ''), u.email, '')
 FROM bookings bk
 LEFT JOIN places p ON p.id = bk.place_id
 LEFT JOIN rooms rm ON rm.id = p.room_id
@@ -28,6 +41,8 @@ LEFT JOIN floors f ON f.id = rm.floor_id
 LEFT JOIN buildings b ON b.id = f.building_id
 LEFT JOIN resources rs ON rs.id = bk.resource_id
 LEFT JOIN resource_groups rg ON rg.id = rs.group_id
+LEFT JOIN teams t ON t.id = bk.team_id
+LEFT JOIN users u ON u.id = bk.user_id
 `
 
 type bookingScanner interface {
@@ -40,6 +55,7 @@ func scanBookingList(row bookingScanner, b *Booking) error {
 		&b.StartsAt, &b.EndsAt, &b.Status,
 		&b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt,
 		&b.PlaceLabel, &b.BookingMode, &b.ResourceGroup, &b.ResourceName, &b.Seats,
+		&b.TeamID, &b.TeamName, &b.UserName,
 	); err != nil {
 		return err
 	}
@@ -52,9 +68,11 @@ func scanBookingList(row bookingScanner, b *Booking) error {
 	return nil
 }
 
-func (s *Service) reloadBooking(ctx context.Context, bookingID uuid.UUID) (*Booking, error) {
+func (s *Service) reloadOwned(ctx context.Context, tenantID, userID, bookingID uuid.UUID) (*Booking, error) {
 	var b Booking
-	err := scanBookingList(s.pool.QueryRow(ctx, bookingListFrom+` WHERE bk.id = $1`, bookingID), &b)
+	err := scanBookingList(s.pool.QueryRow(ctx, bookingListFrom+`
+		WHERE bk.id = $1 AND bk.tenant_id = $2 AND bk.user_id = $3
+	`, bookingID, tenantID, userID), &b)
 	if err != nil {
 		return nil, fmt.Errorf("reload booking: %w", err)
 	}
@@ -141,7 +159,7 @@ func (s *Service) SearchResources(ctx context.Context, tenantID uuid.UUID, filte
 	return out, nil
 }
 
-func (s *Service) CreateResourceBooking(ctx context.Context, tenantID, userID, resourceID uuid.UUID, mode string, startsAt, endsAt time.Time) (*Booking, error) {
+func (s *Service) CreateResourceBooking(ctx context.Context, tenantID, userID, resourceID uuid.UUID, mode string, startsAt, endsAt time.Time, teamID *uuid.UUID) (*Booking, error) {
 	var err error
 	switch mode {
 	case "daily":
@@ -185,14 +203,18 @@ func (s *Service) CreateResourceBooking(ctx context.Context, tenantID, userID, r
 	if busy[resourceID] {
 		return nil, auth.ErrConflict("Ressource ist in diesem Zeitraum bereits gebucht")
 	}
+	teamName, err := s.bookableTeamName(ctx, tenantID, userID, teamID)
+	if err != nil {
+		return nil, err
+	}
 
 	var b Booking
 	var resID uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO bookings (tenant_id, user_id, resource_id, starts_at, ends_at, status)
-		VALUES ($1, $2, $3, $4, $5, 'booked')
+		INSERT INTO bookings (tenant_id, user_id, resource_id, team_id, starts_at, ends_at, status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'booked')
 		RETURNING id, tenant_id, user_id, resource_id, starts_at, ends_at, status::text, checked_in_at, checked_out_at, created_at
-	`, tenantID, userID, resourceID, startsAt, endsAt).Scan(
+	`, tenantID, userID, resourceID, teamID, startsAt, endsAt).Scan(
 		&b.ID, &b.TenantID, &b.UserID, &resID, &b.StartsAt, &b.EndsAt, &b.Status, &b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt,
 	)
 	if err != nil {
@@ -205,6 +227,8 @@ func (s *Service) CreateResourceBooking(ctx context.Context, tenantID, userID, r
 	b.ResourceName = name
 	b.ResourceGroup = group
 	b.Seats = seats
+	b.TeamID = teamID
+	b.TeamName = teamName
 	b.BookingMode = mode
 	b.PlaceLabel = resourceDisplay(group, name, seats)
 	decorateBooking(&b, time.Now().UTC())

@@ -15,9 +15,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Service, bookingSvc *booking.Service) http.Handler {
+func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Service, bookingSvc *booking.Service, opts ServerOptions) http.Handler {
 	mux := http.NewServeMux()
-	authH := AuthHandlers{Service: authSvc}
+	authH := AuthHandlers{Service: authSvc, SecureCookie: opts.SecureCookie, SessionTTL: opts.SessionTTL}
+	lim := newRateLimiter()
+	authPost := func(name string, limit int, window time.Duration, h http.HandlerFunc) http.HandlerFunc {
+		return lim.wrap(name, limit, window, opts.TrustProxy, func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+			h(w, r)
+		})
+	}
 	catH := CatalogHandlers{Service: catalogSvc}
 	bookH := BookingHandlers{Service: bookingSvc}
 
@@ -34,7 +41,9 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("GET /verify", spa)
 	mux.HandleFunc("GET /invite", spa)
 	mux.HandleFunc("GET /app", spa)
+	mux.HandleFunc("GET /app/tenants", spa)
 	mux.HandleFunc("GET /app/users", spa)
+	mux.HandleFunc("GET /app/teams", spa)
 	mux.HandleFunc("GET /app/locations", spa)
 	mux.HandleFunc("GET /app/place-types", spa)
 	mux.HandleFunc("GET /app/equipments", spa)
@@ -61,21 +70,25 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 			"endpoints": []string{
 				"GET /api",
 				"GET /healthz",
-				"auth, catalog, equipments, bookings",
+				"auth, catalog, equipments, bookings, blocks, teams, platform",
 			},
 		})
 	})
 
-	mux.HandleFunc("POST /api/v1/auth/register", authH.RegisterTenant)
-	mux.HandleFunc("GET /api/v1/auth/verify", authH.Verify)
-	mux.HandleFunc("POST /api/v1/auth/verify", authH.Verify)
-	mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
+	mux.HandleFunc("POST /api/v1/auth/register", authPost("register", 5, time.Hour, authH.RegisterTenant))
+	mux.HandleFunc("POST /api/v1/auth/verify", authPost("verify", 10, time.Minute, authH.Verify))
+	mux.HandleFunc("POST /api/v1/auth/login", authPost("login", 10, time.Minute, authH.Login))
 	mux.HandleFunc("POST /api/v1/auth/logout", authH.Logout)
-	mux.HandleFunc("POST /api/v1/auth/accept-invite", authH.AcceptInvite)
+	mux.HandleFunc("POST /api/v1/auth/accept-invite", authPost("accept-invite", 10, time.Minute, authH.AcceptInvite))
 	mux.HandleFunc("GET /api/v1/auth/me", RequireAuth(authSvc, authH.Me))
 
 	tenant := withAuth(authSvc, RequireTenant)
 	admin := withAuth(authSvc, RequireTenantAdmin)
+	platform := withAuth(authSvc, RequirePlatformAdmin)
+
+	platformH := PlatformHandlers{Service: authSvc}
+	mux.HandleFunc("GET /api/v1/platform/tenants", platform(platformH.ListTenants))
+	mux.HandleFunc("PATCH /api/v1/platform/tenants/{id}", platform(platformH.SetTenantStatus))
 
 	memberH := MemberHandlers{Service: authSvc}
 	mux.HandleFunc("GET /api/v1/users", admin(memberH.List))
@@ -84,6 +97,15 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("GET /api/v1/users/import-template", admin(memberH.Template))
 	mux.HandleFunc("POST /api/v1/users/{id}/invite", admin(memberH.ResendInvite))
 	mux.HandleFunc("PATCH /api/v1/users/{id}", admin(memberH.SetDisabled))
+	mux.HandleFunc("PATCH /api/v1/users/{id}/block-right", admin(memberH.SetCanBlock))
+
+	teamH := TeamHandlers{Service: authSvc}
+	mux.HandleFunc("GET /api/v1/teams/mine", tenant(teamH.ListMine))
+	mux.HandleFunc("GET /api/v1/teams", admin(teamH.List))
+	mux.HandleFunc("POST /api/v1/teams", admin(teamH.Create))
+	mux.HandleFunc("PATCH /api/v1/teams/{id}", admin(teamH.Rename))
+	mux.HandleFunc("PUT /api/v1/teams/{id}/members", admin(teamH.SetMembers))
+	mux.HandleFunc("DELETE /api/v1/teams/{id}", admin(teamH.Delete))
 
 	mux.HandleFunc("GET /api/v1/locations", tenant(catH.ListLocations))
 	mux.HandleFunc("POST /api/v1/locations", admin(catH.CreateLocation))
@@ -144,7 +166,12 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 	mux.HandleFunc("POST /api/v1/bookings/{id}/check-out", tenant(bookH.CheckOut))
 	mux.HandleFunc("POST /api/v1/bookings/{id}/cancel", tenant(bookH.Cancel))
 
-	return withCanonicalTenantPath(mux)
+	mux.HandleFunc("GET /api/v1/blocks", tenant(bookH.ListBlocks))
+	mux.HandleFunc("POST /api/v1/blocks", tenant(bookH.CreateBlocks))
+	mux.HandleFunc("DELETE /api/v1/blocks/{id}", tenant(bookH.DeleteBlock))
+
+	secure := opts.SecureCookie || strings.HasPrefix(strings.ToLower(opts.PublicBaseURL), "https://")
+	return securityHeaders(secure, originGuard(opts.PublicBaseURL, withCanonicalTenantPath(mux)))
 }
 
 func serveTenantEntry(w http.ResponseWriter, r *http.Request) {

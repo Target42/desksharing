@@ -31,7 +31,7 @@ func bearerToken(r *http.Request) string {
 
 func RequireAuth(svc *auth.Service, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user, err := svc.Authenticate(r.Context(), bearerToken(r))
+		user, err := svc.Authenticate(r.Context(), tokenFromRequest(r))
 		if err != nil {
 			writeError(w, err)
 			return
@@ -45,6 +45,17 @@ func RequireTenant(next http.HandlerFunc) http.HandlerFunc {
 		user, ok := UserFromContext(r.Context())
 		if !ok || user.TenantID == nil {
 			writeError(w, auth.ErrForbidden("tenant context required"))
+			return
+		}
+		next(w, r)
+	}
+}
+
+func RequirePlatformAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, ok := UserFromContext(r.Context())
+		if !ok || user.Role != "platform_admin" {
+			writeError(w, auth.ErrForbidden("Nur der Platform-Admin darf Mandanten verwalten"))
 			return
 		}
 		next(w, r)

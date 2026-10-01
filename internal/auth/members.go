@@ -17,9 +17,16 @@ type Member struct {
 	Email           string     `json:"email"`
 	DisplayName     string     `json:"display_name"`
 	Role            string     `json:"role"`
+	CanBlock        bool       `json:"can_block"`
 	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty"`
 	DisabledAt      *time.Time `json:"disabled_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
+}
+
+const memberReturning = `id, email, display_name, role::text, can_block, email_verified_at, disabled_at, created_at`
+
+func scanMember(row interface{ Scan(dest ...any) error }, m *Member) error {
+	return row.Scan(&m.ID, &m.Email, &m.DisplayName, &m.Role, &m.CanBlock, &m.EmailVerifiedAt, &m.DisabledAt, &m.CreatedAt)
 }
 
 type CreateMemberInput struct {
@@ -39,7 +46,7 @@ type InviteResult struct {
 
 func (s *Service) ListMembers(ctx context.Context, tenantID uuid.UUID) ([]Member, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, email, display_name, role::text, email_verified_at, disabled_at, created_at
+		SELECT `+memberReturning+`
 		FROM users
 		WHERE tenant_id = $1
 		ORDER BY display_name, email
@@ -52,7 +59,7 @@ func (s *Service) ListMembers(ctx context.Context, tenantID uuid.UUID) ([]Member
 	items := []Member{}
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.ID, &m.Email, &m.DisplayName, &m.Role, &m.EmailVerifiedAt, &m.DisabledAt, &m.CreatedAt); err != nil {
+		if err := scanMember(rows, &m); err != nil {
 			return nil, fmt.Errorf("scan member: %w", err)
 		}
 		items = append(items, m)
@@ -192,14 +199,12 @@ func (s *Service) SetMemberDisabled(ctx context.Context, tenantID, actorID, memb
 		disabledAt = &now
 	}
 	var m Member
-	err = s.pool.QueryRow(ctx, `
+	err = scanMember(s.pool.QueryRow(ctx, `
 		UPDATE users
 		SET disabled_at = $3, updated_at = now()
 		WHERE id = $1 AND tenant_id = $2
-		RETURNING id, email, display_name, role::text, email_verified_at, disabled_at, created_at
-	`, memberID, tenantID, disabledAt).Scan(
-		&m.ID, &m.Email, &m.DisplayName, &m.Role, &m.EmailVerifiedAt, &m.DisabledAt, &m.CreatedAt,
-	)
+		RETURNING `+memberReturning+`
+	`, memberID, tenantID, disabledAt), &m)
 	if err != nil {
 		return nil, fmt.Errorf("update member: %w", err)
 	}
@@ -213,13 +218,30 @@ func (s *Service) SetMemberDisabled(ctx context.Context, tenantID, actorID, memb
 	return &m, nil
 }
 
+func (s *Service) SetMemberCanBlock(ctx context.Context, tenantID, memberID uuid.UUID, canBlock bool) (*Member, error) {
+	var m Member
+	err := scanMember(s.pool.QueryRow(ctx, `
+		UPDATE users
+		SET can_block = $3, updated_at = now()
+		WHERE id = $1 AND tenant_id = $2
+		RETURNING `+memberReturning+`
+	`, memberID, tenantID, canBlock), &m)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, ErrNotFound("Mitarbeiter nicht gefunden")
+		}
+		return nil, fmt.Errorf("update block right: %w", err)
+	}
+	return &m, nil
+}
+
 func (s *Service) AcceptInvite(ctx context.Context, rawToken, password string) error {
 	rawToken = strings.TrimSpace(rawToken)
 	if rawToken == "" {
 		return ErrInvalidInput("Token ist erforderlich")
 	}
-	if len(password) < 8 {
-		return ErrInvalidInput("Passwort muss mindestens 8 Zeichen haben")
+	if err := ValidatePassword(password, ""); err != nil {
+		return err
 	}
 	passwordHash, err := HashPassword(password)
 	if err != nil {
@@ -233,18 +255,21 @@ func (s *Service) AcceptInvite(ctx context.Context, rawToken, password string) e
 	defer tx.Rollback(ctx)
 
 	var (
-		tokenID   uuid.UUID
-		userID    *uuid.UUID
-		expiresAt time.Time
-		usedAt    *time.Time
-		purpose   string
+		tokenID      uuid.UUID
+		userID       *uuid.UUID
+		expiresAt    time.Time
+		usedAt       *time.Time
+		purpose      string
+		tenantStatus *string
 	)
 	err = tx.QueryRow(ctx, `
-		SELECT id, user_id, purpose, expires_at, used_at
-		FROM auth_tokens
-		WHERE token_hash = $1
-		FOR UPDATE
-	`, HashToken(rawToken)).Scan(&tokenID, &userID, &purpose, &expiresAt, &usedAt)
+		SELECT t.id, t.user_id, t.purpose, t.expires_at, t.used_at, tn.status::text
+		FROM auth_tokens t
+		JOIN users u ON u.id = t.user_id
+		LEFT JOIN tenants tn ON tn.id = u.tenant_id
+		WHERE t.token_hash = $1
+		FOR UPDATE OF t
+	`, HashToken(rawToken)).Scan(&tokenID, &userID, &purpose, &expiresAt, &usedAt, &tenantStatus)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return ErrUnauthorized("Einladung ist ungültig oder abgelaufen")
@@ -253,6 +278,9 @@ func (s *Service) AcceptInvite(ctx context.Context, rawToken, password string) e
 	}
 	if usedAt != nil || time.Now().UTC().After(expiresAt) || purpose != PurposeInvite || userID == nil {
 		return ErrUnauthorized("Einladung ist ungültig oder abgelaufen")
+	}
+	if tenantStatus == nil || *tenantStatus != "active" {
+		return ErrForbidden("Mandant ist nicht aktiv")
 	}
 
 	now := time.Now().UTC()
@@ -302,13 +330,11 @@ func (s *Service) inviteLocalMember(ctx context.Context, tenantID uuid.UUID, ema
 	defer tx.Rollback(ctx)
 
 	var m Member
-	err = tx.QueryRow(ctx, `
+	err = scanMember(tx.QueryRow(ctx, `
 		INSERT INTO users (tenant_id, email, display_name, role, identity_provider)
 		VALUES ($1, $2, $3, 'employee', 'local')
-		RETURNING id, email, display_name, role::text, email_verified_at, disabled_at, created_at
-	`, tenantID, email, displayName).Scan(
-		&m.ID, &m.Email, &m.DisplayName, &m.Role, &m.EmailVerifiedAt, &m.DisabledAt, &m.CreatedAt,
-	)
+		RETURNING `+memberReturning+`
+	`, tenantID, email, displayName), &m)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Member{}, "", ErrConflict("E-Mail ist in dieser Firma bereits vergeben")
@@ -339,7 +365,7 @@ func (s *Service) requireActiveTenant(ctx context.Context, tenantID uuid.UUID) e
 }
 
 func (s *Service) sendInvite(ctx context.Context, email, name, rawToken string) {
-	link := s.publicBaseURL + "/invite?token=" + url.QueryEscape(rawToken)
+	link := s.publicBaseURL + "/invite#token=" + url.QueryEscape(rawToken)
 	who := name
 	if strings.TrimSpace(who) == "" {
 		who = email

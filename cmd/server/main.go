@@ -31,6 +31,16 @@ func main() {
 		slog.Error("config", "err", err)
 		os.Exit(1)
 	}
+	if err := cfg.Validate(); err != nil {
+		slog.Error("config", "err", err)
+		os.Exit(1)
+	}
+	if cfg.Env != "production" {
+		slog.Warn("development mode; production security checks are off", "app_env", cfg.Env)
+	}
+	if cfg.DevReturnTokens {
+		slog.Warn("DEV_RETURN_TOKENS is enabled; auth links are included in API responses")
+	}
 
 	if cfg.AutoMigrate {
 		if err := db.Migrate(cfg.DatabaseURL); err != nil {
@@ -85,11 +95,20 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("data directory", "path", cfg.DataDir)
+	startRetention(ctx, authSvc, bookingSvc)
 
 	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(pool, authSvc, catalogSvc, bookingSvc),
+		Addr: cfg.HTTPAddr,
+		Handler: httpapi.NewRouter(pool, authSvc, catalogSvc, bookingSvc, httpapi.ServerOptions{
+			PublicBaseURL: cfg.PublicBaseURL,
+			SecureCookie:  cfg.CookieSecure(),
+			TrustProxy:    cfg.TrustProxy,
+			SessionTTL:    cfg.SessionTTL,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	go func() {
@@ -106,4 +125,28 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = server.Shutdown(shutdownCtx)
+}
+
+func startRetention(ctx context.Context, authSvc *auth.Service, bookingSvc *booking.Service) {
+	run := func() {
+		if err := bookingSvc.RetainPrivacy(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("retention", "err", err)
+		}
+		if err := authSvc.PurgeStaleTokens(ctx); err != nil && ctx.Err() == nil {
+			slog.Error("purge tokens", "err", err)
+		}
+	}
+	go func() {
+		run()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
 }

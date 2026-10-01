@@ -87,6 +87,15 @@ func TestParseMemberFileXLSX(t *testing.T) {
 	}
 }
 
+func TestIsPlausibleEmailRejectsHeaderBreaks(t *testing.T) {
+	if isPlausibleEmail("a@b.de\r\nBcc: x@y.z") {
+		t.Fatal("newline in address")
+	}
+	if !isPlausibleEmail("anna@example.com") {
+		t.Fatal("expected a normal address")
+	}
+}
+
 func TestParseMemberFileRejectsXLS(t *testing.T) {
 	_, err := ParseMemberFile("team.xls", strings.NewReader("E-Mail;Name\n"))
 	if err == nil || !strings.Contains(err.Error(), ".xlsx") {

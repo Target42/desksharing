@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,8 +22,8 @@ type Mailer interface {
 // LogMailer writes messages to the application log (dev default).
 type LogMailer struct{}
 
-func (LogMailer) Send(_ context.Context, to, subject, body string) error {
-	slog.Info("mail", "to", to, "subject", subject, "body", body)
+func (LogMailer) Send(_ context.Context, to, subject, _ string) error {
+	slog.Info("mail not delivered (SMTP nicht konfiguriert)", "to", to, "subject", subject)
 	return nil
 }
 
@@ -76,15 +77,18 @@ type RegisterTenantResult struct {
 }
 
 type LoginInput struct {
-	Email      string `json:"email"`
-	Password   string `json:"password"`
-	TenantSlug string `json:"tenant_slug,omitempty"`
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+	TenantSlug  string `json:"tenant_slug,omitempty"`
+	ReturnToken bool   `json:"return_token,omitempty"`
 }
 
 type SessionResult struct {
-	Token string `json:"token"`
+	Token string `json:"token,omitempty"`
 	User  User   `json:"user"`
 }
+
+const invalidCredentialsMsg = "E-Mail oder Passwort ist falsch."
 
 func (s *Service) RegisterTenant(ctx context.Context, in RegisterTenantInput) (*RegisterTenantResult, error) {
 	in.TenantName = strings.TrimSpace(in.TenantName)
@@ -98,8 +102,11 @@ func (s *Service) RegisterTenant(ctx context.Context, in RegisterTenantInput) (*
 	if !ValidTenantSlug(in.TenantSlug) {
 		return nil, ErrInvalidInput("Ungültiger oder reservierter Slug")
 	}
-	if in.AdminEmail == "" || len(in.AdminPassword) < 8 {
-		return nil, ErrInvalidInput("admin_email and admin_password (min 8 chars) are required")
+	if in.AdminEmail == "" {
+		return nil, ErrInvalidInput("admin_email ist erforderlich")
+	}
+	if err := ValidatePassword(in.AdminPassword, in.AdminEmail); err != nil {
+		return nil, err
 	}
 	if in.AdminDisplayName == "" {
 		in.AdminDisplayName = in.AdminEmail
@@ -160,7 +167,7 @@ func (s *Service) RegisterTenant(ctx context.Context, in RegisterTenantInput) (*
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
-	link := s.publicBaseURL + "/api/v1/auth/verify?token=" + rawToken
+	link := s.publicBaseURL + "/verify#token=" + url.QueryEscape(rawToken)
 	body := fmt.Sprintf(
 		"Bitte bestätigen Sie die Registrierung für %s:\n\n%s\n\nDer Link ist %s gültig.",
 		in.TenantName, link, s.verifyTTL,
@@ -250,29 +257,52 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*SessionResult, err
 	in.Email = normalizeEmail(in.Email)
 	in.TenantSlug = slugify(in.TenantSlug)
 	if in.Email == "" || in.Password == "" {
-		return nil, ErrInvalidInput("email and password are required")
+		return nil, ErrInvalidInput("E-Mail und Passwort sind erforderlich")
+	}
+	if len(in.Password) > MaxPasswordLen {
+		return nil, ErrUnauthorized(invalidCredentialsMsg)
 	}
 
-	user, passwordHash, err := s.findUserForLogin(ctx, in.Email, in.TenantSlug)
+	candidates, err := s.findLoginCandidates(ctx, in.Email, in.TenantSlug)
 	if err != nil {
 		return nil, err
 	}
-	if user.IdentityProvider != "local" {
-		return nil, ErrUnauthorized("local login not available for this account")
+
+	var matched []loginCandidate
+	compared := false
+	for _, c := range candidates {
+		if c.hash == "" {
+			continue
+		}
+		compared = true
+		if CheckPassword(c.hash, in.Password) {
+			matched = append(matched, c)
+		}
 	}
-	if passwordHash == "" || !CheckPassword(passwordHash, in.Password) {
-		return nil, ErrUnauthorized("invalid credentials")
+	if !compared {
+		CheckPassword(bcryptHashForTiming, in.Password)
 	}
-	if user.EmailVerifiedAt == nil {
-		return nil, ErrUnauthorized("email not verified")
+	if len(matched) == 0 {
+		return nil, ErrUnauthorized(invalidCredentialsMsg)
+	}
+	if len(matched) > 1 {
+		return nil, ErrInvalidInput("Diese E-Mail gibt es in mehreren Firmen. Bitte den Mandanten-Slug angeben.")
+	}
+
+	user := matched[0].user
+	if user.IdentityProvider != "local" || user.EmailVerifiedAt == nil {
+		return nil, ErrUnauthorized(invalidCredentialsMsg)
 	}
 	if user.Role != "platform_admin" {
+		if user.TenantID == nil {
+			return nil, ErrUnauthorized(invalidCredentialsMsg)
+		}
 		status, err := s.tenantStatus(ctx, *user.TenantID)
 		if err != nil {
 			return nil, err
 		}
 		if status != "active" {
-			return nil, ErrUnauthorized("tenant is not active")
+			return nil, ErrUnauthorized(invalidCredentialsMsg)
 		}
 	}
 
@@ -288,7 +318,20 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*SessionResult, err
 		return nil, fmt.Errorf("create session: %w", err)
 	}
 
-	return &SessionResult{Token: rawToken, User: *user}, nil
+	return &SessionResult{Token: rawToken, User: user}, nil
+}
+
+// PurgeStaleTokens removes expired and already used tokens so old hashes do not stay in the database.
+func (s *Service) PurgeStaleTokens(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM auth_tokens
+		WHERE expires_at < now() - interval '7 days'
+		   OR (used_at IS NOT NULL AND used_at < now() - interval '7 days')
+	`)
+	if err != nil {
+		return fmt.Errorf("purge tokens: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) Logout(ctx context.Context, rawToken string) error {
@@ -323,6 +366,7 @@ func (s *Service) Authenticate(ctx context.Context, rawToken string) (*User, err
 		  AND t.used_at IS NULL
 		  AND t.expires_at > now()
 		  AND u.disabled_at IS NULL
+		  AND (u.role = 'platform_admin' OR tn.status = 'active')
 	`, HashToken(rawToken), PurposeSession).Scan(
 		&user.ID, &tenantID, &user.Email, &user.DisplayName, &user.Role, &user.IdentityProvider,
 		&user.CanBlock, &verifiedAt, &user.TenantSlug,
@@ -380,7 +424,12 @@ func (s *Service) EnsurePlatformAdmin(ctx context.Context, email, password, disp
 	return nil
 }
 
-func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string) (*User, string, error) {
+type loginCandidate struct {
+	user User
+	hash string
+}
+
+func (s *Service) findLoginCandidates(ctx context.Context, email, tenantSlug string) ([]loginCandidate, error) {
 	if tenantSlug != "" {
 		var user User
 		var hash *string
@@ -400,13 +449,13 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 		)
 		if err != nil {
 			if err == pgx.ErrNoRows {
-				return nil, "", ErrUnauthorized("invalid credentials")
+				return nil, nil
 			}
-			return nil, "", fmt.Errorf("find user: %w", err)
+			return nil, fmt.Errorf("find user: %w", err)
 		}
 		user.TenantID = &tenantID
 		user.EmailVerifiedAt = verifiedAt
-		return &user, deref(hash), nil
+		return []loginCandidate{{user: user, hash: deref(hash)}}, nil
 	}
 
 	rows, err := s.pool.Query(ctx, `
@@ -418,15 +467,11 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 		  AND u.disabled_at IS NULL
 	`, email)
 	if err != nil {
-		return nil, "", fmt.Errorf("find users: %w", err)
+		return nil, fmt.Errorf("find users: %w", err)
 	}
 	defer rows.Close()
 
-	type match struct {
-		user User
-		hash string
-	}
-	var matches []match
+	var matches []loginCandidate
 	for rows.Next() {
 		var user User
 		var tenantID *uuid.UUID
@@ -436,22 +481,16 @@ func (s *Service) findUserForLogin(ctx context.Context, email, tenantSlug string
 			&user.ID, &tenantID, &user.Email, &user.DisplayName, &user.Role, &user.IdentityProvider,
 			&user.CanBlock, &verifiedAt, &user.TenantSlug, &hash,
 		); err != nil {
-			return nil, "", fmt.Errorf("scan user: %w", err)
+			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		user.TenantID = tenantID
 		user.EmailVerifiedAt = verifiedAt
-		matches = append(matches, match{user: user, hash: deref(hash)})
+		matches = append(matches, loginCandidate{user: user, hash: deref(hash)})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	if len(matches) == 0 {
-		return nil, "", ErrUnauthorized("invalid credentials")
-	}
-	if len(matches) > 1 {
-		return nil, "", ErrInvalidInput("tenant_slug is required when email exists in multiple tenants")
-	}
-	return &matches[0].user, matches[0].hash, nil
+	return matches, nil
 }
 
 func (s *Service) tenantStatus(ctx context.Context, tenantID uuid.UUID) (string, error) {

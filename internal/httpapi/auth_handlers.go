@@ -2,12 +2,15 @@ package httpapi
 
 import (
 	"net/http"
+	"time"
 
 	"desksharing/internal/auth"
 )
 
 type AuthHandlers struct {
-	Service *auth.Service
+	Service      *auth.Service
+	SecureCookie bool
+	SessionTTL   time.Duration
 }
 
 func (h AuthHandlers) RegisterTenant(w http.ResponseWriter, r *http.Request) {
@@ -51,11 +54,16 @@ func (h AuthHandlers) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	setSessionCookie(w, out.Token, h.SecureCookie, h.SessionTTL)
+	if !in.ReturnToken {
+		out.Token = ""
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
 func (h AuthHandlers) Logout(w http.ResponseWriter, r *http.Request) {
-	_ = h.Service.Logout(r.Context(), bearerToken(r))
+	_ = h.Service.Logout(r.Context(), tokenFromRequest(r))
+	clearSessionCookies(w, h.SecureCookie)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 

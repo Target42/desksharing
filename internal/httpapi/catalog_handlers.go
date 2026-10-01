@@ -2,8 +2,8 @@ package httpapi
 
 import (
 	"fmt"
+	"io"
 	"net/http"
-	"time"
 
 	"desksharing/internal/auth"
 	"desksharing/internal/catalog"
@@ -581,13 +581,17 @@ func (h CatalogHandlers) FloorPlanImage(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
-	f, path, err := h.Service.OpenFloorPlanImage(r.Context(), h.tenantID(r), planID)
+	f, contentType, err := h.Service.OpenFloorPlanImage(r.Context(), h.tenantID(r), planID)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	defer f.Close()
-	http.ServeContent(w, r, path, time.Time{}, f)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Disposition", `inline; filename="floor-plan"`)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = io.Copy(w, f)
 }
 
 func (h CatalogHandlers) SetRoomRectangle(w http.ResponseWriter, r *http.Request) {

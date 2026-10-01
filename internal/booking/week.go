@@ -143,8 +143,7 @@ func (s *Service) MyWeek(ctx context.Context, tenantID, userID uuid.UUID, weekSt
 	weekEnd := weekStart.AddDate(0, 0, 7)
 
 	rows, err := s.pool.Query(ctx, bookingListFrom+`
-		WHERE bk.tenant_id = $1
-		  AND bk.user_id = $2
+		WHERE `+bookingForUser+`
 		  AND bk.status IN ('booked', 'checked_in', 'checked_out', 'possibly_free')
 		  AND bk.starts_at < $4
 		  AND bk.ends_at > $3

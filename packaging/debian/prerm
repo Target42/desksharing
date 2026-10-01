@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+remove | upgrade)
+	if [ -d /run/systemd/system ]; then
+		systemctl stop desksharing || true
+	fi
+	;;
+esac
+
+exit 0

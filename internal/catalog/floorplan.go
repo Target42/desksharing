@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,10 +67,10 @@ type FloorLayoutPlace struct {
 }
 
 type FloorLayout struct {
-	Floor   Floor            `json:"floor"`
-	Plan    *FloorPlan       `json:"plan,omitempty"`
-	Rooms   []FloorLayoutRoom  `json:"rooms"`
-	Places  []FloorLayoutPlace `json:"places"`
+	Floor  Floor              `json:"floor"`
+	Plan   *FloorPlan         `json:"plan,omitempty"`
+	Rooms  []FloorLayoutRoom  `json:"rooms"`
+	Places []FloorLayoutPlace `json:"places"`
 }
 
 func (s *Service) GetFloorLayout(ctx context.Context, tenantID, floorID uuid.UUID) (*FloorLayout, error) {
@@ -161,17 +162,24 @@ func (s *Service) getFloorPlan(ctx context.Context, floorID uuid.UUID) (*FloorPl
 	return &p, nil
 }
 
-func (s *Service) UploadFloorPlan(ctx context.Context, tenantID, floorID uuid.UUID, filename string, width, height int, r io.Reader) (*FloorPlan, error) {
+const maxFloorPlanBytes = 12 << 20
+
+func (s *Service) UploadFloorPlan(ctx context.Context, tenantID, floorID uuid.UUID, _ string, width, height int, r io.Reader) (*FloorPlan, error) {
 	if err := s.requireFloor(ctx, tenantID, floorID); err != nil {
 		return nil, err
 	}
 	if s.dataDir == "" {
 		return nil, auth.ErrInvalidInput("data directory not configured")
 	}
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".png", ".jpg", ".jpeg", ".webp":
-	default:
+	data, err := io.ReadAll(io.LimitReader(r, maxFloorPlanBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read floor plan: %w", err)
+	}
+	if len(data) > maxFloorPlanBytes {
+		return nil, auth.ErrInvalidInput("file is too large")
+	}
+	ext, ok := detectImageExt(data)
+	if !ok {
 		return nil, auth.ErrInvalidInput("only png, jpg or webp allowed")
 	}
 	if width < 1 {
@@ -183,22 +191,15 @@ func (s *Service) UploadFloorPlan(ctx context.Context, tenantID, floorID uuid.UU
 
 	planID := uuid.New()
 	rel := filepath.ToSlash(filepath.Join("floor-plans", tenantID.String(), planID.String()+ext))
-	abs := filepath.Join(s.dataDir, filepath.FromSlash(rel))
+	abs, err := pathInside(s.dataDir, rel)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir: %w", err)
 	}
-	f, err := os.Create(abs)
-	if err != nil {
-		return nil, fmt.Errorf("create file: %w", err)
-	}
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
-		_ = os.Remove(abs)
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return nil, fmt.Errorf("write file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(abs)
-		return nil, err
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -257,7 +258,9 @@ func (s *Service) UploadFloorPlan(ctx context.Context, tenantID, floorID uuid.UU
 		return nil, err
 	}
 	for _, o := range olds {
-		_ = os.Remove(filepath.Join(s.dataDir, filepath.FromSlash(o.path)))
+		if oldAbs, err := pathInside(s.dataDir, o.path); err == nil {
+			_ = os.Remove(oldAbs)
+		}
 	}
 	p.ImageURL = "/api/v1/floor-plans/" + p.ID.String() + "/image"
 	return &p, nil
@@ -280,12 +283,62 @@ func (s *Service) OpenFloorPlanImage(ctx context.Context, tenantID, planID uuid.
 	if err := s.requireFloor(ctx, tenantID, floorID); err != nil {
 		return nil, "", err
 	}
-	abs := filepath.Join(s.dataDir, filepath.FromSlash(storagePath))
+	contentType := imageContentType(storagePath)
+	if contentType == "" {
+		return nil, "", auth.ErrNotFound("floor plan image missing")
+	}
+	abs, err := pathInside(s.dataDir, storagePath)
+	if err != nil {
+		return nil, "", auth.ErrNotFound("floor plan image missing")
+	}
 	f, err := os.Open(abs)
 	if err != nil {
 		return nil, "", auth.ErrNotFound("floor plan image missing")
 	}
-	return f, abs, nil
+	return f, contentType, nil
+}
+
+func detectImageExt(data []byte) (string, bool) {
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		return ".png", true
+	}
+	if len(data) >= 3 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff {
+		return ".jpg", true
+	}
+	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return ".webp", true
+	}
+	return "", false
+}
+
+func imageContentType(storagePath string) string {
+	switch strings.ToLower(filepath.Ext(storagePath)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	default:
+		return ""
+	}
+}
+
+func pathInside(root, rel string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		return "", fmt.Errorf("invalid storage path")
+	}
+	abs := filepath.Join(rootAbs, clean)
+	relToRoot, err := filepath.Rel(rootAbs, abs)
+	if err != nil || relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid storage path")
+	}
+	return abs, nil
 }
 
 func (s *Service) SetRoomRectangle(ctx context.Context, tenantID, roomID uuid.UUID, rect *Rect) (*FloorLayoutRoom, error) {

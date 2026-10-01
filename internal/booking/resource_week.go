@@ -41,6 +41,7 @@ type ResourceDayCell struct {
 type ResourceDayBooking struct {
 	ID       uuid.UUID `json:"id"`
 	UserName string    `json:"user_name"`
+	TeamName string    `json:"team_name,omitempty"`
 	Status   string    `json:"status"`
 	Mode     string    `json:"mode"`
 	StartsAt time.Time `json:"starts_at"`
@@ -58,6 +59,7 @@ type resourceWeekBooking struct {
 	id         uuid.UUID
 	resourceID uuid.UUID
 	userName   string
+	teamName   string
 	status     string
 	startsAt   time.Time
 	endsAt     time.Time
@@ -113,9 +115,11 @@ func (s *Service) ResourceWeek(ctx context.Context, tenantID, groupID uuid.UUID,
 	if len(ids) > 0 {
 		bRows, err := s.pool.Query(ctx, `
 			SELECT bk.id, bk.resource_id, bk.starts_at, bk.ends_at, bk.status::text,
-			       COALESCE(NULLIF(u.display_name, ''), u.email)
+			       COALESCE(NULLIF(u.display_name, ''), u.email, ''),
+			       COALESCE(t.name, '')
 			FROM bookings bk
 			JOIN users u ON u.id = bk.user_id
+			LEFT JOIN teams t ON t.id = bk.team_id
 			WHERE bk.tenant_id = $1
 			  AND bk.resource_id = ANY($2)
 			  AND bk.status IN ('booked', 'checked_in', 'checked_out')
@@ -129,7 +133,7 @@ func (s *Service) ResourceWeek(ctx context.Context, tenantID, groupID uuid.UUID,
 		defer bRows.Close()
 		for bRows.Next() {
 			var b resourceWeekBooking
-			if err := bRows.Scan(&b.id, &b.resourceID, &b.startsAt, &b.endsAt, &b.status, &b.userName); err != nil {
+			if err := bRows.Scan(&b.id, &b.resourceID, &b.startsAt, &b.endsAt, &b.status, &b.userName, &b.teamName); err != nil {
 				return nil, err
 			}
 			bookings = append(bookings, b)
@@ -175,6 +179,7 @@ func assignResourceDays(metas []resourceWeekMeta, bookings []resourceWeekBooking
 					cell.Bookings = append(cell.Bookings, ResourceDayBooking{
 						ID:       b.id,
 						UserName: b.userName,
+						TeamName: b.teamName,
 						Status:   b.status,
 						Mode:     InferResourceMode(b.startsAt, b.endsAt),
 						StartsAt: b.startsAt,

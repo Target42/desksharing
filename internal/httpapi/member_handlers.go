@@ -116,6 +116,28 @@ func (h MemberHandlers) SetDisabled(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, item)
 }
 
+func (h MemberHandlers) SetCanBlock(w http.ResponseWriter, r *http.Request) {
+	user, _ := UserFromContext(r.Context())
+	id, err := memberID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var body struct {
+		CanBlock bool `json:"can_block"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeError(w, auth.ErrInvalidInput("Ungültiger JSON-Body"))
+		return
+	}
+	item, err := h.Service.SetMemberCanBlock(r.Context(), *user.TenantID, id, body.CanBlock)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
 func memberID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {

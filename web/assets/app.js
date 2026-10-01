@@ -1,4 +1,4 @@
-import { api, apiBlob, apiUpload, getToken, setToken } from "./api.js";
+import { api, apiBlob, apiUpload } from "./api.js";
 
 const views = {
   login: document.querySelector("#view-login"),
@@ -6,7 +6,9 @@ const views = {
   verify: document.querySelector("#view-verify"),
   invite: document.querySelector("#view-invite"),
   home: document.querySelector("#view-home"),
+  tenants: document.querySelector("#view-tenants"),
   users: document.querySelector("#view-users"),
+  teams: document.querySelector("#view-teams"),
   locations: document.querySelector("#view-locations"),
   placeTypes: document.querySelector("#view-place-types"),
   equipments: document.querySelector("#view-equipments"),
@@ -15,6 +17,7 @@ const views = {
 };
 
 let currentUser = null;
+let myTeams = [];
 const nav = {
   level: "locations",
   location: null,
@@ -24,10 +27,17 @@ const nav = {
 };
 
 function navItems() {
+  if (isPlatformAdmin()) {
+    return [
+      ["Mandanten", "/app/tenants"],
+      ["Konto", "/app"],
+    ];
+  }
   if (isAdmin()) {
     return [
       ["Konto", "/app"],
       ["Mitarbeiter", "/app/users"],
+      ["Teams", "/app/teams"],
       ["Standorte", "/app/locations"],
       ["Platztypen", "/app/place-types"],
       ["Ausstattung", "/app/equipments"],
@@ -84,6 +94,10 @@ function isAdmin() {
   return currentUser && currentUser.role === "tenant_admin";
 }
 
+function isPlatformAdmin() {
+  return currentUser && currentUser.role === "platform_admin";
+}
+
 function applyAdminVisibility() {
   const admin = isAdmin();
   document.querySelectorAll(".admin-only").forEach((el) => {
@@ -92,10 +106,19 @@ function applyAdminVisibility() {
   document.querySelectorAll(".employee-only").forEach((el) => {
     el.classList.toggle("hidden", !(currentUser && currentUser.role === "employee"));
   });
+  document.querySelectorAll(".platform-only").forEach((el) => {
+    el.classList.toggle("hidden", !isPlatformAdmin());
+  });
+  const canBlock = !!(currentUser && currentUser.can_block);
+  document.querySelectorAll(".can-block-only").forEach((el) => {
+    el.classList.toggle("hidden", !canBlock);
+  });
 }
 
 function landingPath() {
-  return currentUser && currentUser.role === "employee" ? "/app/bookings" : "/app";
+  if (currentUser && currentUser.role === "employee") return "/app/bookings";
+  if (isPlatformAdmin()) return "/app/tenants";
+  return "/app";
 }
 
 const LOGIN_SLUG_KEY = "desksharing_login_slug";
@@ -151,6 +174,7 @@ async function showSignedInHome() {
 function isAdminPath(path) {
   return (
     path === "/app/users" ||
+    path === "/app/teams" ||
     path === "/app/locations" ||
     path === "/app/place-types" ||
     path === "/app/equipments"
@@ -167,9 +191,17 @@ function roleLabel(role) {
   );
 }
 
+function takeTokenFromLocation() {
+  const hash = window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "";
+  const fromHash = new URLSearchParams(hash).get("token") || "";
+  const fromQuery = new URLSearchParams(window.location.search).get("token") || "";
+  const token = fromHash || fromQuery;
+  if (token) history.replaceState({}, "", window.location.pathname);
+  return token;
+}
+
 async function requireSession() {
-  if (!getToken()) throw new Error("no session");
-  currentUser = await api("/api/v1/auth/me", { auth: true });
+  currentUser = await api("/api/v1/auth/me");
   applyAdminVisibility();
   paintNav();
   return currentUser;
@@ -177,7 +209,6 @@ async function requireSession() {
 
 async function route() {
   const path = pathName();
-  const params = new URLSearchParams(window.location.search);
 
   if (path === "/register") {
     show("register");
@@ -185,7 +216,7 @@ async function route() {
   }
   if (path === "/verify") {
     show("verify");
-    const token = params.get("token") || "";
+    const token = takeTokenFromLocation();
     const input = document.querySelector("#verify-token");
     if (token) input.value = token;
     if (token) await runVerify(token);
@@ -193,39 +224,48 @@ async function route() {
   }
   if (path === "/invite") {
     show("invite");
-    const token = params.get("token") || "";
+    const token = takeTokenFromLocation();
     const input = document.querySelector("#invite-token");
     if (token && input) input.value = token;
     return;
   }
   if (path === "/login" || path === "/") {
-    if (getToken()) {
-      try {
-        await requireSession();
-        await showSignedInHome();
-        return;
-      } catch {
-        setToken("");
-      }
+    try {
+      await requireSession();
+      await showSignedInHome();
+      return;
+    } catch {
+      currentUser = null;
     }
     showLogin("");
     return;
   }
 
   if (path.startsWith("/app")) {
-    if (!getToken()) {
+    try {
+      await requireSession();
+    } catch {
+      currentUser = null;
       const dest = loginEntryPath();
       history.replaceState({}, "", dest);
       showLogin(tenantEntrySlug(dest));
       return;
     }
-    try {
-      await requireSession();
-    } catch {
-      setToken("");
-      const dest = loginEntryPath();
-      history.replaceState({}, "", dest);
-      showLogin(tenantEntrySlug(dest));
+
+    if (path === "/app/tenants") {
+      if (!isPlatformAdmin()) {
+        const dest = landingPath();
+        history.replaceState({}, "", dest);
+        if (dest === "/app/bookings") {
+          show("bookings");
+          await renderBookingsPage();
+          return;
+        }
+        await loadHome();
+        return;
+      }
+      show("tenants");
+      await renderTenants();
       return;
     }
 
@@ -244,6 +284,11 @@ async function route() {
     if (path === "/app/users") {
       show("users");
       await renderUsers();
+      return;
+    }
+    if (path === "/app/teams") {
+      show("teams");
+      await renderTeams();
       return;
     }
     if (path === "/app/locations") {
@@ -278,16 +323,14 @@ async function route() {
   const entry = tenantEntrySlug(path);
   if (entry) {
     rememberLoginSlug(entry);
-    if (getToken()) {
-      try {
-        await requireSession();
-        if ((currentUser.tenant_slug || "") === entry) {
-          await showSignedInHome();
-          return;
-        }
-      } catch {
-        setToken("");
+    try {
+      await requireSession();
+      if ((currentUser.tenant_slug || "") === entry) {
+        await showSignedInHome();
+        return;
       }
+    } catch {
+      currentUser = null;
     }
     showLogin(entry);
     return;
@@ -304,11 +347,70 @@ async function loadHome() {
   document.querySelector("#home-lead-extra").textContent =
     me.role === "employee"
       ? ". Du kannst Plätze buchen — die Verwaltung bleibt beim Administrator."
-      : "";
+      : me.role === "platform_admin"
+        ? ". Du verwaltest die Mandanten."
+        : "";
   document.querySelector("#home-email").textContent = me.email;
   document.querySelector("#home-role").textContent = roleLabel(me.role);
   document.querySelector("#home-tenant").textContent = me.tenant_id || "— (Platform)";
   document.querySelector("#home-provider").textContent = me.identity_provider;
+}
+
+function tenantStatusBadge(status) {
+  const label = { pending: "ausstehend", active: "aktiv", disabled: "deaktiviert" }[status] || status;
+  const cls = status === "active" ? "free" : status === "disabled" ? "busy" : "warn";
+  return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
+}
+
+async function renderTenants({ keepMessage = false } = {}) {
+  const msg = document.querySelector("#tenants-msg");
+  const list = document.querySelector("#tenants-list");
+  if (!keepMessage) clearMsg(msg);
+  list.innerHTML = `<li class="empty">Lade…</li>`;
+  try {
+    const data = await api("/api/v1/platform/tenants", { auth: true });
+    renderList(list, data.items, (item) => {
+      const since = new Date(item.created_at).toLocaleDateString("de-DE");
+      const who = item.admin_name || item.admin_email || "kein Admin";
+      const actions = [];
+      const change = async (status, okText) => {
+        try {
+          await api(`/api/v1/platform/tenants/${item.id}`, { method: "PATCH", auth: true, body: { status } });
+          setMsg(msg, "ok", okText);
+          await renderTenants({ keepMessage: true });
+        } catch (err) {
+          setMsg(msg, "error", err.message || "Statuswechsel fehlgeschlagen.");
+        }
+      };
+      if (item.status === "pending" || item.status === "disabled") {
+        actions.push({
+          label: item.status === "pending" ? "Freischalten" : "Aktivieren",
+          run: () => change("active", `${item.name} ist aktiv.`),
+        });
+      }
+      if (item.status === "active" || item.status === "pending") {
+        actions.push({
+          label: item.status === "pending" ? "Ablehnen" : "Deaktivieren",
+          secondary: true,
+          run: () => {
+            const question = item.status === "pending"
+              ? `${item.name} ablehnen? Die Firma bleibt gesperrt.`
+              : `${item.name} deaktivieren? Anmeldungen sind danach gesperrt.`;
+            if (!confirm(question)) return;
+            return change("disabled", `${item.name} ist deaktiviert.`);
+          },
+        });
+      }
+      return {
+        title: item.name,
+        subtitleHtml: `${tenantStatusBadge(item.status)} ${escapeHtml(who)} · /${escapeHtml(item.slug)} · ${item.user_count} Benutzer · seit ${escapeHtml(since)}`,
+        actions,
+      };
+    });
+  } catch (err) {
+    list.innerHTML = "";
+    setMsg(msg, "error", err.message || "Mandanten konnten nicht geladen werden.");
+  }
 }
 
 async function runVerify(token) {
@@ -329,8 +431,8 @@ async function logout() {
   } catch {
     /* ignore */
   }
-  setToken("");
   currentUser = null;
+  myTeams = [];
   const dest = slug ? `/${slug}` : "/login";
   history.pushState({}, "", dest);
   showLogin(slug);
@@ -352,7 +454,6 @@ document.querySelector("#form-login").addEventListener("submit", async (e) => {
         tenant_slug: tenantEntrySlug(pathName()) || fd.get("tenant_slug") || undefined,
       },
     });
-    setToken(out.token);
     currentUser = out.user;
     rememberLoginSlug((out.user && out.user.tenant_slug) || "");
     history.pushState({}, "", landingPath());
@@ -387,7 +488,7 @@ document.querySelector("#form-register").addEventListener("submit", async (e) =>
       ? `Registrierung gestartet. Anmeldung danach unter /${slug}. Bitte E-Mail bestätigen.`
       : "Registrierung gestartet. Bitte E-Mail bestätigen.";
     if (out.verification_token) {
-      const link = `/verify?token=${encodeURIComponent(out.verification_token)}`;
+      const link = `/verify#token=${encodeURIComponent(out.verification_token)}`;
       msg.className = "msg show ok";
       msg.innerHTML = `${escapeHtml(text)}<br><a href="${link}">Jetzt bestätigen</a><br><span class="mono">${escapeHtml(out.verification_token)}</span>`;
     } else {
@@ -2336,6 +2437,7 @@ async function renderResourcesPage() {
   clearMsg(msg);
   applyAdminVisibility();
   ensureClockOptions();
+  await refreshTeamSelects();
   const searchForm = document.querySelector("#form-resource-search");
   if (searchForm.start_date && !searchForm.start_date.value) searchForm.start_date.value = todayISODate();
   if (searchForm.end_date && !searchForm.end_date.value) searchForm.end_date.value = todayISODate();
@@ -2426,6 +2528,23 @@ async function renderResourcesPage() {
     resourceList.innerHTML = "";
     setMsg(msg, "error", err.message || "Laden fehlgeschlagen.");
   }
+  showResourceTab(sessionStorage.getItem(RESOURCE_TAB_KEY) || "week");
+}
+
+const RESOURCE_TAB_KEY = "desksharing.resourceTab";
+
+function showResourceTab(name) {
+  const allowed = new Set(["catalog", "week", "search"]);
+  if (!allowed.has(name)) name = "week";
+  document.querySelectorAll("[data-resource-tab]").forEach((btn) => {
+    const on = btn.dataset.resourceTab === name;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-resource-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.resourcePane !== name);
+  });
+  sessionStorage.setItem(RESOURCE_TAB_KEY, name);
 }
 
 document.querySelector("#btn-resource-groups-all").addEventListener("click", () => {
@@ -2512,6 +2631,8 @@ async function runResourceSearch(form, keepMessage) {
                 label: "Buchen",
                 run: async () => {
                   const body = { resource_id: item.id, mode: windowSpec.mode };
+                  const teamID = selectedTeamID(form);
+                  if (teamID) body.team_id = teamID;
                   if (windowSpec.mode === "daily") {
                     body.start_date = windowSpec.startDate;
                     body.end_date = windowSpec.endDate;
@@ -3202,6 +3323,7 @@ async function renderBookingsPage() {
   const form = document.querySelector("#form-booking-search");
   const emptyHint = document.querySelector("#bookings-empty-hint");
   ensureClockOptions();
+  await refreshTeamSelects();
   if (form.start_date && !form.start_date.value) {
     const start = new Date();
     start.setMinutes(0, 0, 0);
@@ -3249,7 +3371,27 @@ async function renderBookingsPage() {
   typeSel.value = typeVal;
 
   await initRoomWeekFilters(locs.items || []);
-  await Promise.all([loadMyWeek(), loadMyBookings()]);
+  initBlockDefaults();
+  await initBlockFilters(locs.items || []);
+  await Promise.all([loadMyWeek(), loadMyBookings(), loadBlocks()]);
+  showBookingTab(sessionStorage.getItem(BOOKING_TAB_KEY) || "week");
+}
+
+const BOOKING_TAB_KEY = "desksharing.bookingTab";
+
+function showBookingTab(name) {
+  const allowed = new Set(["week", "room", "search", "blocks"]);
+  if (!allowed.has(name)) name = "week";
+  document.querySelectorAll("[data-booking-tab]").forEach((btn) => {
+    const on = btn.dataset.bookingTab === name;
+    btn.classList.toggle("is-active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll("[data-booking-pane]").forEach((pane) => {
+    pane.classList.toggle("hidden", pane.dataset.bookingPane !== name);
+  });
+  sessionStorage.setItem(BOOKING_TAB_KEY, name);
+  if (name === "room") syncBookingPlanCanvasSize();
 }
 
 const ROOM_WEEK_FILTER_KEY = "desksharing.roomWeekFilter";
@@ -3419,7 +3561,10 @@ async function loadMyWeek() {
         const has = (day.bookings || []).length > 0;
         const items = (day.bookings || [])
           .slice(0, 3)
-          .map((b) => `<span class="cal-item">${escapeHtml(b.place_label || "Buchung")}</span>`)
+          .map((b) => {
+            const title = b.team_name ? `${b.place_label || "Buchung"} · ${b.team_name}` : (b.place_label || "Buchung");
+            return `<span class="cal-item">${escapeHtml(title)}</span>`;
+          })
           .join("");
         const more = (day.bookings || []).length > 3 ? `<span class="cal-item">+${day.bookings.length - 3}</span>` : "";
         const d = new Date(day.date + "T12:00:00");
@@ -3726,6 +3871,7 @@ document.querySelector("#form-week-book")?.addEventListener("submit", async (e) 
         place_id: placeId,
         starts_at: startsAt,
         ends_at: endsAt,
+        ...(selectedTeamID(form) ? { team_id: selectedTeamID(form) } : {}),
       },
     });
     form.classList.add("hidden");
@@ -3736,6 +3882,244 @@ document.querySelector("#form-week-book")?.addEventListener("submit", async (e) 
   }
 });
 
+
+function initBlockDefaults() {
+  const form = document.querySelector("#form-block");
+  if (!form || form.start_date.value) return;
+  const now = new Date();
+  if (now.getHours() >= 18) now.setDate(now.getDate() + 1);
+  const day = formatISODate(now);
+  form.start_date.value = day;
+  form.end_date.value = day;
+  setClock(form.start_hour, form.start_minute, "08:00");
+  setClock(form.end_hour, form.end_minute, "18:00");
+}
+
+function syncBlockTarget() {
+  const room = document.querySelector("#form-block input[name=target]:checked")?.value === "room";
+  document.querySelector("#block-places-field")?.classList.toggle("hidden", room);
+}
+
+async function initBlockFilters(locations) {
+  const locSel = document.querySelector("#block-location");
+  const bldSel = document.querySelector("#block-building");
+  const flrSel = document.querySelector("#block-floor");
+  const roomSel = document.querySelector("#block-room");
+  const placeSel = document.querySelector("#block-places");
+  if (!locSel || !bldSel || !flrSel || !roomSel || !placeSel) return;
+
+  const prefer = readRoomWeekFilter();
+  let bootstrapping = true;
+
+  const clearPlaces = () => {
+    placeSel.innerHTML = "";
+    placeSel.disabled = true;
+  };
+
+  fillSelect(locSel, locations, {
+    placeholder: locations.length ? "Standort wählen" : "Kein Standort",
+    value: prefer.locationId,
+    labelFn: (l) => l.name,
+  });
+
+  const loadPlaces = async () => {
+    clearPlaces();
+    if (!roomSel.value) return;
+    const data = await api(`/api/v1/rooms/${roomSel.value}/places`, { auth: true });
+    const places = data.items || [];
+    placeSel.innerHTML = places
+      .map((p) => {
+        const label = p.is_active ? p.label : `${p.label} (inaktiv)`;
+        return `<option value="${p.id}">${escapeHtml(label)}</option>`;
+      })
+      .join("");
+    placeSel.disabled = places.length === 0;
+  };
+
+  const syncFromLocation = async () => {
+    const keepBuilding = bootstrapping ? prefer.buildingId : "";
+    const keepFloor = bootstrapping ? prefer.floorId : "";
+    const keepRoom = bootstrapping ? prefer.roomId : "";
+    fillSelect(bldSel, [], { placeholder: "Gebäude wählen", labelFn: () => "" });
+    fillSelect(flrSel, [], { placeholder: "Stockwerk wählen", labelFn: () => "" });
+    fillSelect(roomSel, [], { placeholder: "Raum wählen", labelFn: () => "" });
+    clearPlaces();
+    bldSel.disabled = !locSel.value;
+    flrSel.disabled = true;
+    roomSel.disabled = true;
+    if (!locSel.value) return;
+    const data = await api(`/api/v1/locations/${locSel.value}/buildings`, { auth: true });
+    fillSelect(bldSel, data.items || [], {
+      placeholder: "Gebäude wählen",
+      value: keepBuilding,
+      labelFn: (b) => `${b.code} — ${b.name}`,
+    });
+    await syncFromBuilding(keepFloor, keepRoom);
+  };
+
+  const syncFromBuilding = async (keepFloor = "", keepRoom = "") => {
+    if (!bootstrapping) {
+      keepFloor = "";
+      keepRoom = "";
+    }
+    fillSelect(flrSel, [], { placeholder: "Stockwerk wählen", labelFn: () => "" });
+    fillSelect(roomSel, [], { placeholder: "Raum wählen", labelFn: () => "" });
+    clearPlaces();
+    flrSel.disabled = !bldSel.value;
+    roomSel.disabled = true;
+    if (!bldSel.value) return;
+    const data = await api(`/api/v1/buildings/${bldSel.value}/floors`, { auth: true });
+    fillSelect(flrSel, data.items || [], {
+      placeholder: "Stockwerk wählen",
+      value: keepFloor,
+      labelFn: (f) => `${f.name} (Ebene ${f.level})`,
+    });
+    await syncFromFloor(keepRoom);
+  };
+
+  const syncFromFloor = async (keepRoom = "") => {
+    if (!bootstrapping) keepRoom = "";
+    fillSelect(roomSel, [], { placeholder: "Raum wählen", labelFn: () => "" });
+    clearPlaces();
+    roomSel.disabled = !flrSel.value;
+    if (!flrSel.value) return;
+    const data = await api(`/api/v1/floors/${flrSel.value}/rooms`, { auth: true });
+    fillSelect(roomSel, data.items || [], {
+      placeholder: "Raum wählen",
+      value: keepRoom,
+      labelFn: (r) => (r.name ? `${r.number} — ${r.name}` : `Raum ${r.number}`),
+    });
+    await loadPlaces();
+  };
+
+  locSel.onchange = async () => {
+    bootstrapping = false;
+    await syncFromLocation();
+  };
+  bldSel.onchange = async () => {
+    bootstrapping = false;
+    await syncFromBuilding();
+  };
+  flrSel.onchange = async () => {
+    bootstrapping = false;
+    await syncFromFloor();
+  };
+  roomSel.onchange = loadPlaces;
+
+  await syncFromLocation();
+  bootstrapping = false;
+  syncBlockTarget();
+}
+
+function renderBlockList(items) {
+  const list = document.querySelector("#blocks-list");
+  if (!list) return;
+  if (!items.length) {
+    list.innerHTML = `<li class="empty">Keine aktiven Sperren.</li>`;
+    return;
+  }
+  list.innerHTML = items
+    .map((item) => {
+      const mine = currentUser && item.created_by === currentUser.id;
+      const lift = mine || isAdmin()
+        ? `<button type="button" class="secondary" data-block-id="${item.id}">Aufheben</button>`
+        : "";
+      const reason = item.reason ? ` · ${escapeHtml(item.reason)}` : "";
+      return `<li>
+        <div class="item-main">
+          <strong>${escapeHtml(item.target_label || "Sperre")}</strong>
+          <span>${escapeHtml(formatDateTimeDE(item.starts_at))} – ${escapeHtml(formatDateTimeDE(item.ends_at))}${reason}</span>
+          <span>von ${escapeHtml(item.created_by_name || "")}</span>
+        </div>
+        <div class="item-actions">${lift}</div>
+      </li>`;
+    })
+    .join("");
+}
+
+async function loadBlocks() {
+  const list = document.querySelector("#blocks-list");
+  if (!list) return;
+  list.innerHTML = `<li class="empty">Lade…</li>`;
+  try {
+    const data = await api("/api/v1/blocks", { auth: true });
+    renderBlockList(data.items || []);
+  } catch (err) {
+    list.innerHTML = "";
+    setMsg(document.querySelector("#bookings-msg"), "error", err.message || "Sperren konnten nicht geladen werden.");
+  }
+}
+
+document.querySelectorAll("#form-block input[name=target]").forEach((el) => {
+  el.addEventListener("change", syncBlockTarget);
+});
+
+document.querySelector("#form-block")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const msg = document.querySelector("#bookings-msg");
+  clearMsg(msg);
+  const target = form.querySelector("input[name=target]:checked")?.value || "places";
+  const startDate = form.start_date.value;
+  const endDate = form.end_date.value;
+  const startTime = readClock(form.start_hour, form.start_minute);
+  const endTime = readClock(form.end_hour, form.end_minute);
+  const startsAt = localStampToISO(startDate, startTime);
+  const endsAt = localStampToISO(endDate, endTime);
+  if (!startsAt || !endsAt || new Date(endsAt) <= new Date(startsAt)) {
+    setMsg(msg, "error", "Bitte gültigen Zeitraum wählen (Bis nach Von).");
+    return;
+  }
+  const body = {
+    starts_at: startsAt,
+    ends_at: endsAt,
+    reason: form.reason.value || "",
+    place_ids: [],
+  };
+  if (target === "room") {
+    const roomId = document.querySelector("#block-room")?.value || "";
+    if (!roomId) {
+      setMsg(msg, "error", "Bitte einen Raum wählen.");
+      return;
+    }
+    body.room_id = roomId;
+  } else {
+    const selected = [...document.querySelector("#block-places").selectedOptions].map((o) => o.value);
+    if (!selected.length) {
+      setMsg(msg, "error", "Bitte mindestens einen Platz wählen.");
+      return;
+    }
+    body.place_ids = selected;
+  }
+  const btn = form.querySelector("button[type=submit]");
+  btn.disabled = true;
+  try {
+    const out = await api("/api/v1/blocks", { method: "POST", auth: true, body });
+    const n = (out.items || []).length;
+    setMsg(msg, "ok", target === "room" ? "Raum gesperrt." : `${n} ${n === 1 ? "Platz" : "Plätze"} gesperrt.`);
+    await Promise.all([loadBlocks(), loadRoomWeek()]);
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Sperren fehlgeschlagen.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.querySelector("#blocks-list")?.addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-block-id]");
+  if (!btn) return;
+  const msg = document.querySelector("#bookings-msg");
+  clearMsg(msg);
+  btn.disabled = true;
+  try {
+    await api(`/api/v1/blocks/${btn.getAttribute("data-block-id")}`, { method: "DELETE", auth: true });
+    setMsg(msg, "ok", "Sperre aufgehoben.");
+    await Promise.all([loadBlocks(), loadRoomWeek()]);
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Sperre konnte nicht aufgehoben werden.");
+    btn.disabled = false;
+  }
+});
 
 document.querySelector("#btn-my-week-prev")?.addEventListener("click", async () => {
   myWeekStart = formatISODate(addDays(myWeekStart, -7));
@@ -3767,7 +4151,9 @@ document.querySelector("#resource-week-group")?.addEventListener("change", () =>
 });
 
 function resourceBookingChip(booking) {
-  const who = booking.user_name || "gebucht";
+  const who = booking.team_name
+    ? (booking.user_name ? `${booking.team_name} · ${booking.user_name}` : booking.team_name)
+    : (booking.user_name || "gebucht");
   let when = "ganzer Tag";
   if (booking.mode !== "daily") {
     const clock = (iso) =>
@@ -3910,6 +4296,8 @@ document.querySelector("#form-resource-week-book")?.addEventListener("submit", a
   clearMsg(msg);
   const mode = form.querySelector('input[name=mode]:checked')?.value || "hourly";
   const body = { resource_id: form.resource_id.value, mode };
+  const teamID = selectedTeamID(form);
+  if (teamID) body.team_id = teamID;
   if (mode === "daily") {
     if (!form.start_date.value || !form.end_date.value || form.end_date.value < form.start_date.value) {
       setMsg(msg, "error", "Bitte Von- und Bis-Datum wählen.");
@@ -3956,8 +4344,9 @@ async function loadMyBookings() {
       return;
     }
     renderList(list, data.items, (item) => {
+      const own = item.user_id === currentUser?.id;
       const actions = [];
-      if (item.can_check_in) {
+      if (own && item.can_check_in) {
         actions.push({
           label: "Check-in",
           run: async () => {
@@ -3971,7 +4360,7 @@ async function loadMyBookings() {
           },
         });
       }
-      if (item.can_check_out) {
+      if (own && item.can_check_out) {
         actions.push({
           label: "Check-out",
           run: async () => {
@@ -3985,7 +4374,7 @@ async function loadMyBookings() {
           },
         });
       }
-      if (item.status === "booked" || item.status === "possibly_free") {
+      if (own && (item.status === "booked" || item.status === "possibly_free")) {
         actions.push({
           label: "Stornieren",
           secondary: true,
@@ -4001,7 +4390,7 @@ async function loadMyBookings() {
       }
       return {
         title: item.place_label || "Buchung",
-        subtitle: `${bookingStatusLabel(item.status)} · ${bookingRangeLabel(item)}`,
+        subtitle: `${bookingStatusLabel(item.status)} · ${bookingRangeLabel(item)}${bookingForLabel(item)}`,
         actions,
       };
     });
@@ -4053,6 +4442,7 @@ document.querySelector("#form-booking-search").addEventListener("submit", async 
                       place_id: item.id,
                       starts_at: params.get("starts_at"),
                       ends_at: params.get("ends_at"),
+                      ...(selectedTeamID(e.target) ? { team_id: selectedTeamID(e.target) } : {}),
                     },
                   });
                   setMsg(msg, "ok", `${item.label} gebucht.`);
@@ -4130,6 +4520,16 @@ function renderMemberList(items) {
           );
         }
       }
+      if (member.can_block) {
+        actions.push(
+          `<button type="button" class="secondary" data-user-action="revoke-block" data-user-id="${member.id}">Sperr-Recht entziehen</button>`,
+        );
+      } else {
+        actions.push(
+          `<button type="button" class="secondary" data-user-action="grant-block" data-user-id="${member.id}">Sperr-Recht erteilen</button>`,
+        );
+      }
+      const blockBadge = member.can_block ? "" : `<span class="badge warn">kein Sperr-Recht</span>`;
       return `<li>
         <div class="item-main">
           <strong>${escapeHtml(member.display_name || member.email)}</strong>
@@ -4137,6 +4537,7 @@ function renderMemberList(items) {
         </div>
         <div class="item-actions">
           <span class="${status.cls}">${status.label}</span>
+          ${blockBadge}
           ${actions.join("")}
         </div>
       </li>`;
@@ -4167,10 +4568,153 @@ function showInviteLink(msg, text, token) {
     setMsg(msg, "ok", text);
     return;
   }
-  const link = `/invite?token=${encodeURIComponent(token)}`;
+  const link = `/invite#token=${encodeURIComponent(token)}`;
   msg.className = "msg show ok";
   msg.innerHTML = `${escapeHtml(text)} <a href="${link}">Einladungslink öffnen</a>`;
 }
+
+function selectedTeamID(form) {
+  return form?.team_id?.value || "";
+}
+
+function bookingForLabel(item) {
+  if (!item.team_name) return "";
+  if (item.user_id === currentUser?.id) return ` · für ${item.team_name}`;
+  return item.user_name ? ` · für ${item.team_name} · ${item.user_name}` : ` · für ${item.team_name}`;
+}
+
+async function refreshTeamSelects() {
+  try {
+    const data = await api("/api/v1/teams/mine", { auth: true });
+    myTeams = data.items || [];
+  } catch {
+    myTeams = [];
+  }
+  document.querySelectorAll("[data-team-book]").forEach((label) => {
+    const select = label.querySelector("select");
+    if (!select) return;
+    const current = select.value;
+    select.replaceChildren(new Option("mich", ""));
+    myTeams.forEach((team) => select.appendChild(new Option(team.name, team.id)));
+    if ([...select.options].some((option) => option.value === current)) select.value = current;
+    label.classList.toggle("hidden", myTeams.length === 0);
+  });
+}
+
+function memberOptionLabel(user) {
+  const name = user.display_name || user.email;
+  return user.disabled_at ? `${name} (deaktiviert)` : name;
+}
+
+function fillTeamMemberSelect(users, selected) {
+  const select = document.querySelector("#form-team-edit select[name=user_ids]");
+  select.replaceChildren();
+  users.forEach((user) => {
+    const option = new Option(memberOptionLabel(user), user.id);
+    option.selected = selected.has(user.id);
+    select.appendChild(option);
+  });
+}
+
+function openTeamEditor(team, users) {
+  const form = document.querySelector("#form-team-edit");
+  form.team_id.value = team.id;
+  form.querySelector("[name=name]").value = team.name;
+  fillTeamMemberSelect(users, new Set((team.members || []).map((member) => member.id)));
+  form.classList.remove("hidden");
+}
+
+async function renderTeams({ keepMessage = false } = {}) {
+  const msg = document.querySelector("#teams-msg");
+  const list = document.querySelector("#teams-list");
+  if (!keepMessage) clearMsg(msg);
+  list.innerHTML = `<li class="empty">Lade…</li>`;
+  try {
+    const [teams, users] = await Promise.all([
+      api("/api/v1/teams", { auth: true }),
+      api("/api/v1/users", { auth: true }),
+    ]);
+    const teamItems = teams.items || [];
+    const userItems = users.items || [];
+    const editor = document.querySelector("#form-team-edit");
+    if (editor.team_id.value && !teamItems.some((team) => team.id === editor.team_id.value)) {
+      editor.classList.add("hidden");
+      editor.reset();
+    }
+    renderList(list, teamItems, (team) => {
+      const names = (team.members || []).map((member) => member.display_name || member.email);
+      return {
+        title: team.name,
+        subtitle: names.length ? names.join(", ") : "keine Mitglieder",
+        actions: [
+          {
+            label: "Bearbeiten",
+            secondary: true,
+            run: () => openTeamEditor(team, userItems),
+          },
+        ],
+      };
+    });
+  } catch (err) {
+    list.innerHTML = "";
+    setMsg(msg, "error", err.message || "Teams konnten nicht geladen werden.");
+  }
+}
+
+document.querySelector("#form-team-create")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#teams-msg");
+  clearMsg(msg);
+  const name = new FormData(e.target).get("name");
+  try {
+    const team = await api("/api/v1/teams", { method: "POST", auth: true, body: { name } });
+    e.target.reset();
+    setMsg(msg, "ok", `Team „${team.name}“ angelegt.`);
+    await renderTeams({ keepMessage: true });
+    const users = await api("/api/v1/users", { auth: true });
+    openTeamEditor({ ...team, members: team.members || [] }, users.items || []);
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Anlegen fehlgeschlagen.");
+  }
+});
+
+document.querySelector("#form-team-edit")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.querySelector("#teams-msg");
+  clearMsg(msg);
+  const form = e.target;
+  const userIDs = [...form.user_ids.selectedOptions].map((option) => option.value);
+  try {
+    await api(`/api/v1/teams/${form.team_id.value}`, { method: "PATCH", auth: true, body: { name: form.querySelector("[name=name]").value } });
+    const team = await api(`/api/v1/teams/${form.team_id.value}/members`, {
+      method: "PUT",
+      auth: true,
+      body: { user_ids: userIDs },
+    });
+    setMsg(msg, "ok", `Team „${team.name}“ gespeichert.`);
+    await renderTeams({ keepMessage: true });
+    const users = await api("/api/v1/users", { auth: true });
+    openTeamEditor(team, users.items || []);
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Speichern fehlgeschlagen.");
+  }
+});
+
+document.querySelector("#btn-team-delete")?.addEventListener("click", async () => {
+  const form = document.querySelector("#form-team-edit");
+  const msg = document.querySelector("#teams-msg");
+  if (!form.team_id.value || !confirm("Team wirklich löschen? Bestehende Buchungen bleiben, verlieren aber die Team-Zuordnung.")) return;
+  clearMsg(msg);
+  try {
+    await api(`/api/v1/teams/${form.team_id.value}`, { method: "DELETE", auth: true });
+    form.classList.add("hidden");
+    form.reset();
+    setMsg(msg, "ok", "Team gelöscht.");
+    await renderTeams({ keepMessage: true });
+  } catch (err) {
+    setMsg(msg, "error", err.message || "Löschen fehlgeschlagen.");
+  }
+});
 
 document.querySelector("#form-user-create").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -4217,7 +4761,7 @@ function renderImportResult(result) {
     .join("");
   const links = created
     .map((row) => {
-      const href = `/invite?token=${encodeURIComponent(row.invite_token)}`;
+      const href = `/invite#token=${encodeURIComponent(row.invite_token)}`;
       return `<li><div class="item-main"><strong>${escapeHtml(row.display_name || row.email)}</strong><span><a href="${href}">Einladungslink</a></span></div></li>`;
     })
     .join("");
@@ -4258,7 +4802,7 @@ document.querySelector("#form-user-import").addEventListener("submit", async (e)
 
 async function downloadTemplate(format) {
   const res = await fetch(`/api/v1/users/import-template?format=${encodeURIComponent(format)}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    credentials: "same-origin",
   });
   if (!res.ok) {
     let message = "Vorlage konnte nicht geladen werden.";
@@ -4295,6 +4839,17 @@ document.querySelector("#users-list").addEventListener("click", async (e) => {
     if (action === "invite") {
       const out = await api(`/api/v1/users/${id}/invite`, { method: "POST", auth: true });
       showInviteLink(msg, "Einladung erneut verschickt.", out.invite_token);
+    } else if (action === "revoke-block" || action === "grant-block") {
+      await api(`/api/v1/users/${id}/block-right`, {
+        method: "PATCH",
+        auth: true,
+        body: { can_block: action === "grant-block" },
+      });
+      setMsg(msg, "ok", action === "grant-block" ? "Sperr-Recht erteilt." : "Sperr-Recht entzogen.");
+      if (id === currentUser.id) {
+        currentUser.can_block = action === "grant-block";
+        applyAdminVisibility();
+      }
     } else {
       await api(`/api/v1/users/${id}`, {
         method: "PATCH",
@@ -4308,6 +4863,13 @@ document.querySelector("#users-list").addEventListener("click", async (e) => {
     setMsg(msg, "error", err.message || "Aktion fehlgeschlagen.");
     btn.disabled = false;
   }
+});
+
+document.querySelectorAll("[data-booking-tab]").forEach((btn) => {
+  btn.addEventListener("click", () => showBookingTab(btn.dataset.bookingTab));
+});
+document.querySelectorAll("[data-resource-tab]").forEach((btn) => {
+  btn.addEventListener("click", () => showResourceTab(btn.dataset.resourceTab));
 });
 
 window.addEventListener("popstate", route);

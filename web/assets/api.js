@@ -1,25 +1,11 @@
-const TOKEN_KEY = "desksharing_token";
-
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || "";
-}
-
-export function setToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
-}
-
-export async function api(path, { method = "GET", body, auth = false } = {}) {
+export async function api(path, { method = "GET", body } = {}) {
   const headers = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (auth) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
 
   const res = await fetch(path, {
     method,
     headers,
+    credentials: "same-origin",
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -42,13 +28,13 @@ export async function api(path, { method = "GET", body, auth = false } = {}) {
   return data;
 }
 
-export async function apiUpload(path, formData, { auth = true } = {}) {
-  const headers = { Accept: "application/json" };
-  if (auth) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
-  const res = await fetch(path, { method: "POST", headers, body: formData });
+export async function apiUpload(path, formData) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    credentials: "same-origin",
+    body: formData,
+  });
   let data = null;
   const text = await res.text();
   if (text) {
@@ -67,13 +53,8 @@ export async function apiUpload(path, formData, { auth = true } = {}) {
   return data;
 }
 
-export async function apiBlob(path, { auth = true } = {}) {
-  const headers = {};
-  if (auth) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
-  const res = await fetch(path, { headers });
+export async function apiBlob(path) {
+  const res = await fetch(path, { credentials: "same-origin" });
   if (!res.ok) {
     const err = new Error(res.statusText || "Bild laden fehlgeschlagen");
     err.status = res.status;

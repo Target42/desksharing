@@ -16,6 +16,10 @@ const (
 	PurposeInvite        = "invite"
 )
 
+// bcryptHashForTiming is a real cost-10 hash. Login compares against it when
+// no stored hash exists, so missing accounts take about as long as real ones.
+const bcryptHashForTiming = "$2a$10$LeAsL3IxkB5.jAo7k49SHurA94rvKEEwJC7OtpsPnRBi693moh6yy"
+
 func HashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {

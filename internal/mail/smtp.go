@@ -42,6 +42,9 @@ func (m *SMTPMailer) Send(ctx context.Context, to, subject, body string) error {
 	if to == "" {
 		return fmt.Errorf("mail recipient required")
 	}
+	if strings.ContainsAny(to, "\r\n") || strings.ContainsAny(subject, "\r\n") {
+		return fmt.Errorf("mail header contains a line break")
+	}
 
 	fromAddr := extractAddress(m.cfg.From)
 	msg := strings.Builder{}
@@ -87,11 +90,13 @@ func (m *SMTPMailer) sendStartTLS(addr, from, to string, payload []byte, deadlin
 	}
 	defer client.Close()
 
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		tlsCfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
-		if err := client.StartTLS(tlsCfg); err != nil {
-			return fmt.Errorf("smtp starttls: %w", err)
-		}
+	ok, _ := client.Extension("STARTTLS")
+	if !ok {
+		return fmt.Errorf("smtp server does not support STARTTLS")
+	}
+	tlsCfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	if err := client.StartTLS(tlsCfg); err != nil {
+		return fmt.Errorf("smtp starttls: %w", err)
 	}
 	if err := m.auth(client); err != nil {
 		return err

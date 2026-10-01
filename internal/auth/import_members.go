@@ -337,8 +337,13 @@ func decodeImportText(data []byte) string {
 }
 
 func isPlausibleEmail(email string) bool {
-	if email == "" || len(email) > 254 || strings.ContainsAny(email, " \t") {
+	if email == "" || len(email) > 254 {
 		return false
+	}
+	for _, r := range email {
+		if r <= ' ' || r == '<' || r == '>' || r == '"' || r == '\\' {
+			return false
+		}
 	}
 	at := strings.Index(email, "@")
 	if at <= 0 || at != strings.LastIndex(email, "@") || at >= len(email)-1 {

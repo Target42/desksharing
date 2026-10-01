@@ -4,25 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Desksharing</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;600;700&display=swap"
-      rel="stylesheet"
-    />
     <link rel="icon" href="/assets/logo.png" type="image/png" />
     <link rel="stylesheet" href="/assets/app.css" />
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-      crossorigin=""
-    />
-    <script
-      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-      crossorigin=""
-    ></script>
+    <link rel="stylesheet" href="/assets/vendor/leaflet/leaflet.css" />
+    <script src="/assets/vendor/leaflet/leaflet.js"></script>
   </head>
   <body>
     <main class="shell">
@@ -60,7 +45,7 @@
             <label>Admin-Name<input name="admin_display_name" required placeholder="Alex Admin" /></label>
             <label>Admin-E-Mail<input name="admin_email" type="email" required /></label>
           </div>
-          <label>Passwort (min. 8 Zeichen)<input name="admin_password" type="password" minlength="8" required /></label>
+          <label>Passwort (min. 12 Zeichen)<input name="admin_password" type="password" minlength="12" required /></label>
           <div class="actions">
             <button type="submit">Registrieren</button>
             <a class="button secondary" href="/login">Zur Anmeldung</a>
@@ -74,8 +59,8 @@
         <div id="invite-msg" class="msg" role="status"></div>
         <form id="form-invite">
           <label>Einladungs-Token<input id="invite-token" name="token" required /></label>
-          <label>Passwort (min. 8 Zeichen)<input name="password" type="password" minlength="8" required autocomplete="new-password" /></label>
-          <label>Passwort wiederholen<input name="password2" type="password" minlength="8" required autocomplete="new-password" /></label>
+          <label>Passwort (min. 12 Zeichen)<input name="password" type="password" minlength="12" required autocomplete="new-password" /></label>
+          <label>Passwort wiederholen<input name="password2" type="password" minlength="12" required autocomplete="new-password" /></label>
           <div class="actions">
             <button type="submit">Passwort setzen</button>
             <a class="button secondary" href="/login">Zur Anmeldung</a>
@@ -114,6 +99,21 @@
           <a class="button" href="/app/bookings">Arbeitsplatz buchen</a>
           <a class="button secondary" href="/app/resources">Ressource buchen</a>
         </div>
+        <div class="actions platform-only hidden">
+          <a class="button" href="/app/tenants">Mandanten verwalten</a>
+        </div>
+      </section>
+
+      <section id="view-tenants" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Mandanten</h1>
+            <p class="lead">Firmen freischalten oder sperren. Ein deaktivierter Mandant kann sich nicht anmelden. Freischalten bestätigt auch noch offene Admin-Konten.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Mandanten"></nav>
+        </div>
+        <div id="tenants-msg" class="msg" role="status"></div>
+        <ul class="list" id="tenants-list"></ul>
       </section>
 
       <section id="view-users" class="panel app-panel hidden">
@@ -149,6 +149,40 @@
                 <button type="button" class="secondary" id="btn-template-xlsx">Vorlage Excel</button>
               </div>
               <div id="import-result"></div>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-teams" class="panel app-panel hidden">
+        <div class="app-header">
+          <div>
+            <h1 class="brand">Teams</h1>
+            <p class="lead">Mitglieder buchen Plätze und Ressourcen für ein Team. Nur wer im Team ist, kann dafür buchen.</p>
+          </div>
+          <nav class="app-nav" data-app-nav="Teams"></nav>
+        </div>
+        <div id="teams-msg" class="msg" role="status"></div>
+        <div class="split">
+          <ul class="list" id="teams-list"></ul>
+          <div class="side-stack">
+            <form id="form-team-create" class="create-box">
+              <h3>Neues Team</h3>
+              <label>Name<input name="name" required maxlength="80" placeholder="Vertrieb" /></label>
+              <div class="actions"><button type="submit">Anlegen</button></div>
+            </form>
+            <form id="form-team-edit" class="create-box hidden">
+              <h3>Team bearbeiten</h3>
+              <input type="hidden" name="team_id" />
+              <label>Name<input name="name" required maxlength="80" /></label>
+              <label>Mitglieder
+                <select name="user_ids" multiple size="8"></select>
+                <span class="hint">Mehrere Personen mit Strg. Ohne Auswahl hat das Team keine Mitglieder.</span>
+              </label>
+              <div class="actions">
+                <button type="submit">Speichern</button>
+                <button type="button" class="secondary" id="btn-team-delete">Löschen</button>
+              </div>
             </form>
           </div>
         </div>
@@ -302,11 +336,17 @@
         <div class="app-header">
           <div>
             <h1 class="brand">Ressourcen</h1>
-            <p class="lead">Eigenständig buchbar, stundenweise oder für einen bis mehrere Tage. Zum Beispiel IT-Ausrüstung oder Fahrzeuge.</p>
+            <p class="lead">Bestand, Wochenplan oder Suche — jeweils für sich.</p>
           </div>
           <nav class="app-nav" data-app-nav="Ressourcen"></nav>
         </div>
         <div id="resources-msg" class="msg" role="status"></div>
+        <div class="booking-tabs" role="tablist" aria-label="Ressourcenbereiche">
+          <button type="button" id="tab-resource-catalog" role="tab" data-resource-tab="catalog" aria-controls="resource-pane-catalog" aria-selected="false">Bestand</button>
+          <button type="button" id="tab-resource-week" role="tab" data-resource-tab="week" aria-controls="resource-pane-week" aria-selected="true" class="is-active">Woche</button>
+          <button type="button" id="tab-resource-search" role="tab" data-resource-tab="search" aria-controls="resource-pane-search" aria-selected="false">Suchen</button>
+        </div>
+        <div id="resource-pane-catalog" data-resource-pane="catalog" class="hidden" role="tabpanel" aria-labelledby="tab-resource-catalog">
         <div class="split">
           <div>
             <div class="section-head"><h2>Gruppen</h2></div>
@@ -334,7 +374,9 @@
             </form>
           </div>
         </div>
+        </div>
 
+        <div id="resource-pane-week" data-resource-pane="week" role="tabpanel" aria-labelledby="tab-resource-week">
         <div class="create-box">
           <div class="week-toolbar">
             <h3>Gebuchte Ressourcen</h3>
@@ -389,13 +431,19 @@
               <label>Von<input name="start_date" type="date" lang="de-DE" /></label>
               <label>Bis <span class="hint">(inklusive)</span><input name="end_date" type="date" lang="de-DE" /></label>
             </div>
+            <label class="team-book-field hidden" data-team-book>Für
+              <select name="team_id"><option value="">mich</option></select>
+              <span class="hint">Nur Teams, in denen du Mitglied bist.</span>
+            </label>
             <div class="actions">
               <button type="submit">Buchen</button>
               <button type="button" class="secondary" id="btn-resource-week-book-cancel">Abbrechen</button>
             </div>
           </form>
         </div>
+        </div>
 
+        <div id="resource-pane-search" data-resource-pane="search" class="booking-split hidden" role="tabpanel" aria-labelledby="tab-resource-search">
         <form id="form-resource-search" class="create-box">
           <h3>Ressource buchen</h3>
           <div class="row-2">
@@ -428,18 +476,25 @@
             <label>Von<input name="start_date" type="date" lang="de-DE" /></label>
             <label>Bis <span class="hint">(inklusive)</span><input name="end_date" type="date" lang="de-DE" /></label>
           </div>
+          <label class="team-book-field hidden" data-team-book>Für
+            <select name="team_id"><option value="">mich</option></select>
+            <span class="hint">Nur Teams, in denen du Mitglied bist.</span>
+          </label>
           <label class="check-inline"><input type="checkbox" name="only_available" checked /> nur freie Ressourcen</label>
           <div class="actions"><button type="submit">Verfügbarkeit prüfen</button></div>
         </form>
-        <div class="section-head"><h2>Treffer</h2></div>
-        <ul class="list" id="resource-search-list"></ul>
+        <div>
+          <div class="section-head"><h2>Treffer</h2></div>
+          <ul class="list" id="resource-search-list"></ul>
+        </div>
+        </div>
       </section>
 
       <section id="view-bookings" class="panel app-panel hidden">
         <div class="app-header">
           <div>
             <h1 class="brand">Buchungen</h1>
-            <p class="lead">Freie Plätze suchen, buchen und einchecken.</p>
+            <p class="lead">Woche, Raumplan oder Suche — jeweils für sich.</p>
           </div>
           <nav class="app-nav" data-app-nav="Buchungen"></nav>
         </div>
@@ -450,6 +505,14 @@
           <div class="actions" id="bookings-empty-actions"></div>
         </div>
 
+        <div class="booking-tabs" role="tablist" aria-label="Buchungsbereiche">
+          <button type="button" id="tab-booking-week" role="tab" data-booking-tab="week" aria-controls="booking-pane-week" aria-selected="true" class="is-active">Woche</button>
+          <button type="button" id="tab-booking-room" role="tab" data-booking-tab="room" aria-controls="booking-pane-room" aria-selected="false">Raum</button>
+          <button type="button" id="tab-booking-search" role="tab" data-booking-tab="search" aria-controls="booking-pane-search" aria-selected="false">Suchen</button>
+          <button type="button" id="tab-booking-blocks" role="tab" data-booking-tab="blocks" aria-controls="booking-pane-blocks" aria-selected="false">Sperren</button>
+        </div>
+
+        <div id="booking-pane-week" data-booking-pane="week" role="tabpanel" aria-labelledby="tab-booking-week">
         <div class="create-box">
           <div class="week-toolbar">
             <h3>Meine Woche</h3>
@@ -461,7 +524,11 @@
           </div>
           <div class="week-calendar" id="my-week-calendar"></div>
         </div>
+        <div class="section-head"><h2>Meine Buchungen</h2></div>
+        <ul class="list" id="my-bookings-list"></ul>
+        </div>
 
+        <div id="booking-pane-room" data-booking-pane="room" class="hidden" role="tabpanel" aria-labelledby="tab-booking-room">
         <div class="create-box">
           <div class="week-toolbar">
             <h3>Raum-Wochenübersicht</h3>
@@ -509,7 +576,7 @@
               <tbody></tbody>
             </table>
           </div>
-          <p class="hint legend-line">
+            <p class="hint legend-line">
             <span class="cell-swatch free"></span> frei
             <span class="cell-swatch partial"></span> teilweise
             <span class="cell-swatch full"></span> ganzer Tag
@@ -520,40 +587,98 @@
             <p class="lead" id="week-book-summary"></p>
             <input type="hidden" name="place_id" />
             <input type="hidden" name="date" />
-            <div class="day-scale">
-              <div class="day-timeline" id="week-book-timeline" role="img" aria-label="Belegung zwischen 08:00 und 18:00"></div>
-              <div class="day-axis" id="week-book-axis" aria-hidden="true"></div>
-              <p class="hint day-busy-caption" id="week-book-busy"></p>
+            <div class="week-book-split">
+              <div>
+                <div class="day-scale">
+                  <div class="day-timeline" id="week-book-timeline" role="img" aria-label="Belegung zwischen 08:00 und 18:00"></div>
+                  <div class="day-axis" id="week-book-axis" aria-hidden="true"></div>
+                  <p class="hint day-busy-caption" id="week-book-busy"></p>
+                </div>
+                <div id="week-book-free-slots" class="slot-chips"></div>
+              </div>
+              <div>
+                <fieldset class="equip-fieldset">
+                  <legend>Buchungsumfang</legend>
+                  <label class="check-inline"><input type="radio" name="scope" value="full" checked /> ganzer Tag (08:00–18:00)</label>
+                  <label class="check-inline"><input type="radio" name="scope" value="partial" /> teilweise</label>
+                </fieldset>
+                <div id="week-book-partial-fields" class="row-2 hidden">
+                  <label>Von
+                    <span class="clock-24">
+                      <select name="start_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde von"></select>
+                      <span aria-hidden="true">:</span>
+                      <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
+                    </span>
+                  </label>
+                  <label>Bis
+                    <span class="clock-24">
+                      <select name="end_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde bis"></select>
+                      <span aria-hidden="true">:</span>
+                      <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
+                    </span>
+                  </label>
+                </div>
+                <label class="team-book-field hidden" data-team-book>Für
+                  <select name="team_id"><option value="">mich</option></select>
+                  <span class="hint">Nur Teams, in denen du Mitglied bist.</span>
+                </label>
+                <div class="actions">
+                  <button type="submit">Buchen</button>
+                  <button type="button" class="secondary" id="btn-week-book-cancel">Abbrechen</button>
+                </div>
+              </div>
             </div>
-            <div id="week-book-free-slots" class="slot-chips"></div>
+          </form>
+        </div>
+        </div>
+
+        <div id="booking-pane-blocks" data-booking-pane="blocks" class="booking-split hidden" role="tabpanel" aria-labelledby="tab-booking-blocks">
+        <form id="form-block" class="create-box can-block-only hidden">
+            <h3>Platz oder Raum sperren</h3>
+            <p class="hint">Gesperrte Plätze und Räume sind in diesem Zeitraum nicht buchbar. Die Administration kann das Sperr-Recht entziehen.</p>
             <fieldset class="equip-fieldset">
-              <legend>Buchungsumfang</legend>
-              <label class="check-inline"><input type="radio" name="scope" value="full" checked /> ganzer Tag (08:00–18:00)</label>
-              <label class="check-inline"><input type="radio" name="scope" value="partial" /> teilweise</label>
+              <legend>Ziel</legend>
+              <label class="check-inline"><input type="radio" name="target" value="places" checked /> einzelne Plätze</label>
+              <label class="check-inline"><input type="radio" name="target" value="room" /> ganzer Raum</label>
             </fieldset>
-            <div id="week-book-partial-fields" class="row-2 hidden">
+            <div class="week-filters">
+              <label>Standort<select id="block-location"></select></label>
+              <label>Gebäude<select id="block-building" disabled></select></label>
+              <label>Stockwerk<select id="block-floor" disabled></select></label>
+              <label>Raum<select id="block-room" disabled></select></label>
+            </div>
+            <label id="block-places-field">Plätze
+              <select id="block-places" multiple size="6"></select>
+              <span class="hint">Mehrere Plätze mit Strg auswählen.</span>
+            </label>
+            <div class="row-2">
               <label>Von
                 <span class="clock-24">
-                  <select name="start_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde von"></select>
+                  <input name="start_date" type="date" lang="de-DE" required />
+                  <select name="start_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde von"></select>
                   <span aria-hidden="true">:</span>
                   <select name="start_minute" data-clock="minute" aria-label="Minute von"></select>
                 </span>
               </label>
               <label>Bis
                 <span class="clock-24">
-                  <select name="end_hour" data-clock="hour" data-min="8" data-max="18" aria-label="Stunde bis"></select>
+                  <input name="end_date" type="date" lang="de-DE" required />
+                  <select name="end_hour" data-clock="hour" data-min="0" data-max="23" aria-label="Stunde bis"></select>
                   <span aria-hidden="true">:</span>
                   <select name="end_minute" data-clock="minute" aria-label="Minute bis"></select>
                 </span>
               </label>
             </div>
-            <div class="actions">
-              <button type="submit">Buchen</button>
-              <button type="button" class="secondary" id="btn-week-book-cancel">Abbrechen</button>
-            </div>
+            <label>Grund<input name="reason" maxlength="500" placeholder="z. B. Teamwoche, Umbau" /></label>
+            <div class="actions"><button type="submit">Sperren</button></div>
           </form>
+          <div class="create-box" id="blocks-panel">
+            <div class="section-head"><h3>Aktive Sperren</h3></div>
+            <ul class="list" id="blocks-list"></ul>
+          </div>
         </div>
 
+        <div id="booking-pane-search" data-booking-pane="search" class="booking-split hidden" role="tabpanel" aria-labelledby="tab-booking-search">
         <form id="form-booking-search" class="create-box">
           <h3>Verfügbarkeit / Buchen</h3>
           <div class="row-2">
@@ -579,13 +704,18 @@
             <label>Platztyp<select name="place_type_id"><option value="">alle</option></select></label>
           </div>
           <label>Ausstattung (Mehrfachauswahl)<select name="equipment_ids" multiple size="4"></select></label>
+          <label class="team-book-field hidden" data-team-book>Für
+            <select name="team_id"><option value="">mich</option></select>
+            <span class="hint">Nur Teams, in denen du Mitglied bist.</span>
+          </label>
           <label class="check-inline"><input type="checkbox" name="only_available" checked /> nur freie Plätze</label>
           <div class="actions"><button type="submit">Suchen</button></div>
         </form>
-        <div class="section-head"><h2>Treffer</h2></div>
-        <ul class="list" id="booking-search-list"></ul>
-        <div class="section-head"><h2>Meine Buchungen</h2></div>
-        <ul class="list" id="my-bookings-list"></ul>
+        <div>
+          <div class="section-head"><h2>Treffer</h2></div>
+          <ul class="list" id="booking-search-list"></ul>
+        </div>
+        </div>
       </section>
     </main>
 

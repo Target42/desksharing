@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+purge)
+	if getent passwd desksharing >/dev/null; then
+		deluser --system desksharing >/dev/null 2>&1 || true
+	fi
+	if getent group desksharing >/dev/null; then
+		delgroup --system desksharing >/dev/null 2>&1 || true
+	fi
+	echo "Datenbank und /var/lib/desksharing wurden nicht gelöscht."
+	;;
+remove)
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+	fi
+	;;
+esac
+
+exit 0

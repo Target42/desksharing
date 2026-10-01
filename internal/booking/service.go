@@ -56,6 +56,9 @@ type Booking struct {
 	EndsAt        time.Time  `json:"ends_at"`
 	Status        string     `json:"status"`
 	BookingMode   string     `json:"booking_mode,omitempty"`
+	TeamID        *uuid.UUID `json:"team_id,omitempty"`
+	TeamName      string     `json:"team_name,omitempty"`
+	UserName      string     `json:"user_name,omitempty"`
 	CheckedInAt   *time.Time `json:"checked_in_at,omitempty"`
 	CheckedOutAt  *time.Time `json:"checked_out_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -90,6 +93,7 @@ func (s *Service) ReleaseNoShows(ctx context.Context, tenantID uuid.UUID) error 
 			  AND checked_in_at IS NULL
 		) AS deadlines
 		WHERE bk.id = deadlines.id
+		  AND bk.tenant_id = $1
 		  AND bk.created_at <= deadlines.no_show_deadline
 		  AND deadlines.no_show_deadline <= now()
 	`, tenantID)
@@ -192,7 +196,7 @@ func (s *Service) SearchPlaces(ctx context.Context, tenantID uuid.UUID, filter S
 	return places, nil
 }
 
-func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUID, startsAt, endsAt time.Time) (*Booking, error) {
+func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUID, startsAt, endsAt time.Time, teamID *uuid.UUID) (*Booking, error) {
 	if !endsAt.After(startsAt) {
 		return nil, auth.ErrInvalidInput("ends_at must be after starts_at")
 	}
@@ -230,14 +234,18 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUI
 	if busy[placeID] {
 		return nil, auth.ErrConflict("place already booked or blocked in this period")
 	}
+	teamName, err := s.bookableTeamName(ctx, tenantID, userID, teamID)
+	if err != nil {
+		return nil, err
+	}
 
 	var b Booking
 	var placeUUID uuid.UUID
 	err = s.pool.QueryRow(ctx, `
-		INSERT INTO bookings (tenant_id, user_id, place_id, starts_at, ends_at, status)
-		VALUES ($1, $2, $3, $4, $5, 'booked')
+		INSERT INTO bookings (tenant_id, user_id, place_id, team_id, starts_at, ends_at, status)
+		VALUES ($1, $2, $3, $4, $5, $6, 'booked')
 		RETURNING id, tenant_id, user_id, place_id, starts_at, ends_at, status::text, checked_in_at, checked_out_at, created_at
-	`, tenantID, userID, placeID, startsAt.UTC(), endsAt.UTC()).Scan(
+	`, tenantID, userID, placeID, teamID, startsAt.UTC(), endsAt.UTC()).Scan(
 		&b.ID, &b.TenantID, &b.UserID, &placeUUID, &b.StartsAt, &b.EndsAt, &b.Status, &b.CheckedInAt, &b.CheckedOutAt, &b.CreatedAt,
 	)
 	if err != nil {
@@ -248,6 +256,8 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUI
 	}
 	b.PlaceID = &placeUUID
 	b.BookingMode = bookingMode
+	b.TeamID = teamID
+	b.TeamName = teamName
 	b.PlaceLabel, _ = s.placeLabel(ctx, placeUUID)
 	decorateBooking(&b, time.Now().UTC())
 	return &b, nil
@@ -256,7 +266,7 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, placeID uuid.UUI
 func (s *Service) ListMine(ctx context.Context, tenantID, userID uuid.UUID) ([]Booking, error) {
 	_ = s.ReleaseNoShows(ctx, tenantID)
 	rows, err := s.pool.Query(ctx, bookingListFrom+`
-		WHERE bk.tenant_id = $1 AND bk.user_id = $2
+		WHERE `+bookingForUser+`
 		  AND bk.status <> 'cancelled'
 		  AND bk.ends_at > now()
 		ORDER BY bk.starts_at
@@ -297,16 +307,16 @@ func (s *Service) CheckIn(ctx context.Context, tenantID, userID, bookingID uuid.
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE bookings
-		SET status = 'checked_in', checked_in_at = $2
-		WHERE id = $1
-	`, bookingID, now)
+		SET status = 'checked_in', checked_in_at = $4
+		WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND status = 'booked'
+	`, bookingID, tenantID, userID, now)
 	if err != nil {
 		return nil, fmt.Errorf("check in: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, auth.ErrNotFound("booking not found")
 	}
-	updated, err := s.reloadBooking(ctx, bookingID)
+	updated, err := s.reloadOwned(ctx, tenantID, userID, bookingID)
 	if err != nil {
 		return nil, err
 	}
@@ -328,16 +338,16 @@ func (s *Service) CheckOut(ctx context.Context, tenantID, userID, bookingID uuid
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE bookings
-		SET status = 'checked_out', checked_out_at = $2, ends_at = LEAST(ends_at, $2)
-		WHERE id = $1
-	`, bookingID, now)
+		SET status = 'checked_out', checked_out_at = $4, ends_at = LEAST(ends_at, $4)
+		WHERE id = $1 AND tenant_id = $2 AND user_id = $3 AND status = 'checked_in'
+	`, bookingID, tenantID, userID, now)
 	if err != nil {
 		return nil, fmt.Errorf("check out: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, auth.ErrNotFound("booking not found")
 	}
-	updated, err := s.reloadBooking(ctx, bookingID)
+	updated, err := s.reloadOwned(ctx, tenantID, userID, bookingID)
 	if err != nil {
 		return nil, err
 	}
@@ -356,15 +366,16 @@ func (s *Service) Cancel(ctx context.Context, tenantID, userID, bookingID uuid.U
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE bookings
 		SET status = 'cancelled'
-		WHERE id = $1
-	`, bookingID)
+		WHERE id = $1 AND tenant_id = $2 AND user_id = $3
+		  AND status IN ('booked', 'possibly_free')
+	`, bookingID, tenantID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("cancel: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return nil, auth.ErrNotFound("booking not found")
 	}
-	updated, err := s.reloadBooking(ctx, bookingID)
+	updated, err := s.reloadOwned(ctx, tenantID, userID, bookingID)
 	if err != nil {
 		return nil, err
 	}
@@ -466,6 +477,37 @@ func (s *Service) placeLabel(ctx context.Context, placeID uuid.UUID) (string, er
 		WHERE p.id = $1
 	`, placeID).Scan(&label)
 	return label, err
+}
+
+func (s *Service) bookableTeamName(ctx context.Context, tenantID, userID uuid.UUID, teamID *uuid.UUID) (string, error) {
+	if teamID == nil || *teamID == uuid.Nil {
+		return "", nil
+	}
+	var name string
+	var member bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT t.name,
+		       EXISTS (
+		         SELECT 1
+		         FROM team_members tm
+		         JOIN users u ON u.id = tm.user_id
+		         WHERE tm.team_id = t.id
+		           AND tm.user_id = $3
+		           AND u.disabled_at IS NULL
+		       )
+		FROM teams t
+		WHERE t.id = $1 AND t.tenant_id = $2
+	`, *teamID, tenantID, userID).Scan(&name, &member)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", auth.ErrNotFound("Team nicht gefunden")
+		}
+		return "", fmt.Errorf("load team: %w", err)
+	}
+	if !member {
+		return "", auth.ErrForbidden("Nur Mitglieder können für dieses Team buchen")
+	}
+	return name, nil
 }
 
 func decorateBooking(b *Booking, now time.Time) {

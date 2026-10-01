@@ -2,16 +2,19 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"desksharing/internal/auth"
 	"desksharing/internal/mail"
 )
 
 // Config holds runtime settings for the server.
 type Config struct {
+	Env         string
 	HTTPAddr    string
 	DatabaseURL string
 	AutoMigrate bool
@@ -22,6 +25,7 @@ type Config struct {
 	SessionTTL      time.Duration
 	VerifyTTL       time.Duration
 	DevReturnTokens bool
+	TrustProxy      bool
 
 	PlatformAdminEmail    string
 	PlatformAdminPassword string
@@ -34,6 +38,7 @@ type Config struct {
 // Optional .env is loaded by the caller before Load.
 func Load() (Config, error) {
 	cfg := Config{
+		Env:                   strings.ToLower(getEnv("APP_ENV", "development")),
 		HTTPAddr:              getEnv("HTTP_ADDR", ":8081"),
 		DatabaseURL:           os.Getenv("DATABASE_URL"),
 		AutoMigrate:           getEnvBool("AUTO_MIGRATE", true),
@@ -41,7 +46,8 @@ func Load() (Config, error) {
 		PublicBaseURL:         strings.TrimRight(getEnv("PUBLIC_BASE_URL", "http://localhost:8081"), "/"),
 		SessionTTL:            getEnvDuration("SESSION_TTL", 7*24*time.Hour),
 		VerifyTTL:             getEnvDuration("VERIFY_TTL", 48*time.Hour),
-		DevReturnTokens:       getEnvBool("DEV_RETURN_TOKENS", true),
+		DevReturnTokens:       getEnvBool("DEV_RETURN_TOKENS", false),
+		TrustProxy:            getEnvBool("TRUST_PROXY", false),
 		PlatformAdminEmail:    os.Getenv("PLATFORM_ADMIN_EMAIL"),
 		PlatformAdminPassword: os.Getenv("PLATFORM_ADMIN_PASSWORD"),
 		PlatformAdminName:     getEnv("PLATFORM_ADMIN_NAME", "Platform Admin"),
@@ -115,6 +121,73 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// CookieSecure is true when the public site is served over HTTPS.
+// Behind a TLS-terminating proxy this follows PUBLIC_BASE_URL, not the
+// connection the Go process sees.
+func (c Config) CookieSecure() bool {
+	return strings.HasPrefix(strings.ToLower(c.PublicBaseURL), "https://")
+}
+
+// Validate rejects insecure production settings. Development stays permissive
+// so local Docker can keep simple passwords.
+func (c Config) Validate() error {
+	switch c.Env {
+	case "development", "production":
+	default:
+		return fmt.Errorf("APP_ENV must be development or production")
+	}
+	if c.Env != "production" {
+		return nil
+	}
+
+	var problems []string
+	if c.DevReturnTokens {
+		problems = append(problems, "DEV_RETURN_TOKENS must be false")
+	}
+	if !c.CookieSecure() {
+		problems = append(problems, "PUBLIC_BASE_URL must use https")
+	}
+	if c.SMTP.Host == "" || c.SMTP.From == "" {
+		problems = append(problems, "SMTP_HOST and SMTP_FROM are required")
+	}
+	switch strings.ToLower(c.SMTP.TLSMode) {
+	case "starttls", "tls", "ssl":
+	default:
+		problems = append(problems, "SMTP_TLS must be starttls or tls")
+	}
+	if err := auth.ValidatePassword(c.PlatformAdminPassword, c.PlatformAdminEmail); err != nil {
+		problems = append(problems, "PLATFORM_ADMIN_PASSWORD is missing or too weak")
+	}
+	if msg := databaseProblems(c.DatabaseURL); msg != "" {
+		problems = append(problems, msg)
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("production config: %s", strings.Join(problems, "; "))
+}
+
+func databaseProblems(databaseURL string) string {
+	u, err := url.Parse(databaseURL)
+	if err != nil || u.User == nil {
+		return "DATABASE_URL must include user, password and sslmode"
+	}
+	pass, ok := u.User.Password()
+	if !ok || pass == "" {
+		return "database password is required"
+	}
+	switch strings.ToLower(pass) {
+	case "desksharing", "postgres", "password", "changeme", "changeme123":
+		return "database password is a default value"
+	}
+	switch strings.ToLower(u.Query().Get("sslmode")) {
+	case "require", "verify-ca", "verify-full":
+		return ""
+	default:
+		return "database sslmode must be require, verify-ca or verify-full"
+	}
 }
 
 // Port parses HTTP_ADDR for logging; returns 0 if not a plain :port.

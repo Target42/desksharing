@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+configure)
+	if ! getent passwd desksharing >/dev/null; then
+		adduser --system --group --home /var/lib/desksharing --no-create-home desksharing
+	fi
+	install -d -o desksharing -g desksharing -m 750 /var/lib/desksharing
+	install -d -o desksharing -g desksharing -m 750 /var/lib/desksharing/mobile
+	install -d -o root -g desksharing -m 750 /etc/desksharing
+	if [ ! -f /etc/desksharing/desksharing.env ]; then
+		install -o root -g desksharing -m 640 \
+			/usr/share/desksharing/desksharing.env \
+			/etc/desksharing/desksharing.env
+	fi
+	chown root:desksharing /etc/desksharing/desksharing.env
+	chmod 640 /etc/desksharing/desksharing.env
+	if [ -d /run/systemd/system ]; then
+		systemctl daemon-reload || true
+		if systemctl is-enabled desksharing >/dev/null 2>&1; then
+			systemctl restart desksharing || true
+		fi
+	fi
+	;;
+esac
+
+exit 0

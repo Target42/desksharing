@@ -8,7 +8,7 @@ import (
 )
 
 func TestTenantEntryRoute(t *testing.T) {
-	h := NewRouter(nil, nil, nil, nil)
+	h := NewRouter(nil, nil, nil, nil, ServerOptions{PublicBaseURL: "http://localhost:8081"})
 
 	t.Run("serves login page", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -16,8 +16,18 @@ func TestTenantEntryRoute(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status %d", rec.Code)
 		}
-		if !strings.Contains(rec.Body.String(), "form-login") {
+		if rec.Header().Get("Strict-Transport-Security") != "" {
+			t.Fatal("local http must not send HSTS")
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "form-login") {
 			t.Fatal("expected login form")
+		}
+		if strings.Contains(body, "unpkg.com") || strings.Contains(body, "fonts.googleapis.com") {
+			t.Fatal("login page still loads third-party scripts or fonts")
+		}
+		if !strings.Contains(body, "/assets/vendor/leaflet/leaflet.js") {
+			t.Fatal("leaflet should be served from this host")
 		}
 	})
 

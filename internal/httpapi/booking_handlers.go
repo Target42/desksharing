@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"desksharing/internal/auth"
@@ -78,6 +79,7 @@ func (h BookingHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PlaceID    string `json:"place_id"`
 		ResourceID string `json:"resource_id"`
+		TeamID     string `json:"team_id"`
 		Mode       string `json:"mode"`
 		StartsAt   string `json:"starts_at"`
 		EndsAt     string `json:"ends_at"`
@@ -88,8 +90,13 @@ func (h BookingHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, auth.ErrInvalidInput("invalid JSON body"))
 		return
 	}
+	teamID, err := optionalTeamID(body.TeamID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	if body.ResourceID != "" {
-		h.createResource(w, r, tenantID, userID, body.ResourceID, body.Mode, body.StartsAt, body.EndsAt, body.StartDate, body.EndDate)
+		h.createResource(w, r, tenantID, userID, body.ResourceID, body.Mode, body.StartsAt, body.EndsAt, body.StartDate, body.EndDate, teamID)
 		return
 	}
 	placeID, err := uuid.Parse(body.PlaceID)
@@ -107,7 +114,7 @@ func (h BookingHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, auth.ErrInvalidInput("ends_at must be RFC3339"))
 		return
 	}
-	item, err := h.Service.Create(r.Context(), tenantID, userID, placeID, startsAt, endsAt)
+	item, err := h.Service.Create(r.Context(), tenantID, userID, placeID, startsAt, endsAt, teamID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -115,7 +122,7 @@ func (h BookingHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, item)
 }
 
-func (h BookingHandlers) createResource(w http.ResponseWriter, r *http.Request, tenantID, userID uuid.UUID, resourceRaw, mode, startsRaw, endsRaw, startDate, endDate string) {
+func (h BookingHandlers) createResource(w http.ResponseWriter, r *http.Request, tenantID, userID uuid.UUID, resourceRaw, mode, startsRaw, endsRaw, startDate, endDate string, teamID *uuid.UUID) {
 	resourceID, err := uuid.Parse(resourceRaw)
 	if err != nil {
 		writeError(w, auth.ErrInvalidInput("resource_id must be a UUID"))
@@ -149,7 +156,7 @@ func (h BookingHandlers) createResource(w http.ResponseWriter, r *http.Request, 
 		writeError(w, auth.ErrInvalidInput("mode muss hourly oder daily sein"))
 		return
 	}
-	item, err := h.Service.CreateResourceBooking(r.Context(), tenantID, userID, resourceID, mode, startsAt, endsAt)
+	item, err := h.Service.CreateResourceBooking(r.Context(), tenantID, userID, resourceID, mode, startsAt, endsAt, teamID)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -365,4 +372,16 @@ func (h BookingHandlers) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func optionalTeamID(raw string) (*uuid.UUID, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return nil, auth.ErrInvalidInput("team_id must be a UUID")
+	}
+	return &id, nil
 }
