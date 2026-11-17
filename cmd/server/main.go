@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -94,6 +95,10 @@ func main() {
 		slog.Error("data dir", "err", err)
 		os.Exit(1)
 	}
+	if err := os.MkdirAll(filepath.Join(cfg.DataDir, "mobile"), 0o750); err != nil {
+		slog.Error("mobile dir", "err", err)
+		os.Exit(1)
+	}
 	slog.Info("data directory", "path", cfg.DataDir)
 	startRetention(ctx, authSvc, bookingSvc)
 
@@ -104,6 +109,7 @@ func main() {
 			SecureCookie:  cfg.CookieSecure(),
 			TrustProxy:    cfg.TrustProxy,
 			SessionTTL:    cfg.SessionTTL,
+			DataDir:       cfg.DataDir,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       2 * time.Minute,

@@ -4872,5 +4872,19 @@ document.querySelectorAll("[data-resource-tab]").forEach((btn) => {
   btn.addEventListener("click", () => showResourceTab(btn.dataset.resourceTab));
 });
 
+async function revealAppDownload() {
+  const link = document.querySelector("#app-download");
+  if (!link) return;
+  try {
+    const info = await api("/api/v1/app/android");
+    if (!info.available || !info.url) return;
+    link.href = info.url;
+    link.classList.remove("hidden");
+  } catch {
+    /* ohne APK bleibt der Link aus */
+  }
+}
+
 window.addEventListener("popstate", route);
+revealAppDownload();
 route();

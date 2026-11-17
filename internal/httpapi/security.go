@@ -37,6 +37,7 @@ type ServerOptions struct {
 	SecureCookie  bool
 	TrustProxy    bool
 	SessionTTL    time.Duration
+	DataDir       string
 }
 
 func securityHeaders(secure bool, next http.Handler) http.Handler {

@@ -94,6 +94,57 @@ weak_password() {
 	return 1
 }
 
+configure_nginx() {
+	base=$1
+	host=$(printf '%s\n' "$base" | sed -n 's#^https://\([^/:]*\).*#\1#p')
+	case $host in
+	"" | *[!A-Za-z0-9.-]* | .* | *. | *..*)
+		echo "Kein gültiger Hostname in PUBLIC_BASE_URL: $base" >&2
+		exit 1
+		;;
+	esac
+
+	if ! command -v nginx >/dev/null 2>&1; then
+		apt-get update
+		apt-get install -y nginx
+	fi
+
+	site=/etc/nginx/sites-available/desksharing
+	if [ ! -f "$site" ]; then
+		echo "Nginx-Vorlage fehlt: $site" >&2
+		exit 1
+	fi
+
+	tmp=$(mktemp)
+	awk -v host="$host" '
+		$1 == "server_name" {
+			print "    server_name " host ";"
+			next
+		}
+		{ print }
+	' "$site" >"$tmp"
+	cat "$tmp" >"$site"
+	rm -f "$tmp"
+
+	enabled=/etc/nginx/sites-enabled/desksharing
+	if [ ! -e "$enabled" ]; then
+		ln -s "$site" "$enabled"
+	fi
+
+	nginx -t
+	if command -v systemctl >/dev/null 2>&1; then
+		if systemctl is-active nginx >/dev/null 2>&1; then
+			systemctl reload nginx
+		else
+			systemctl enable --now nginx
+		fi
+	else
+		nginx -s reload
+	fi
+	echo "Nginx leitet ${host} an 127.0.0.1:8081 weiter."
+	echo "Zertifikat: certbot --nginx -d ${host}"
+}
+
 if ! command -v psql >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1; then
 	apt-get update
 	apt-get install -y postgresql openssl
@@ -170,7 +221,9 @@ https://*example.com* | https:// | "")
 	exit 1
 	;;
 https://*)
-	set_kv PUBLIC_BASE_URL "${base%/}"
+	base=${base%/}
+	set_kv PUBLIC_BASE_URL "$base"
+	configure_nginx "$base"
 	;;
 *)
 	echo "PUBLIC_BASE_URL muss mit https:// beginnen." >&2
@@ -235,5 +288,4 @@ if command -v systemctl >/dev/null 2>&1; then
 	systemctl restart desksharing
 	echo "Dienst desksharing gestartet. Status: systemctl status desksharing"
 fi
-echo "Nginx: server_name in /etc/nginx/sites-available/desksharing setzen, Site aktivieren, Zertifikat holen."
 echo "Datenbankpasswort steht in $ENV_FILE."

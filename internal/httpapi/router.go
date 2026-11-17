@@ -64,6 +64,10 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 		writeJSON(w, status, body)
 	})
 
+	appH := AndroidAppHandlers{DataDir: opts.DataDir}
+	mux.HandleFunc("GET /api/v1/app/android", appH.Info)
+	mux.HandleFunc("GET /download/desksharing.apk", appH.Download)
+
 	mux.HandleFunc("GET /api", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"service": "desksharing",
@@ -71,6 +75,8 @@ func NewRouter(pool *pgxpool.Pool, authSvc *auth.Service, catalogSvc *catalog.Se
 				"GET /api",
 				"GET /healthz",
 				"auth, catalog, equipments, bookings, blocks, teams, platform",
+				"GET /api/v1/app/android",
+				"GET /download/desksharing.apk",
 			},
 		})
 	})
