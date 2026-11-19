@@ -25,8 +25,8 @@ Sperren darf jeder. Bei Missbrauch entzieht der Admin dem Benutzer das Sperr-Rec
 # Authentifizierung
 
 - **Phase 1:** E-Mail / Passwort (inkl. Bestätigungslink bei Registrierung)
-- **Später:** LDAP / Active Directory (die meisten Firmen haben das) — pro Mandant zuschaltbar, parallel zu lokalem Login
-- **Architektur von Anfang an:** Benutzer über eine Identity-Provider-Abstraktion (lokal vs. LDAP), damit LDAP später ohne Umbau des User-Modells angebunden werden kann. LDAP selbst ist kein MVP.
+- **Mögliche Erweiterung:** LDAP / Active Directory (die meisten Firmen haben das) — pro Mandant zuschaltbar, parallel zu lokalem Login
+- **Architektur von Anfang an:** Benutzer über eine Identity-Provider-Abstraktion (lokal vs. LDAP), damit LDAP später ohne Umbau des User-Modells angebunden werden kann.
 
 # Standorte
 
